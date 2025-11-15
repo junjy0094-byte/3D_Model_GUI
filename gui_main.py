@@ -280,14 +280,16 @@ class Viewer3DPanel:
     def __init__(self, parent):
         self.frame = ttk.LabelFrame(parent, text="3D 미리보기", padding=5)
 
-        # Matplotlib Figure
-        self.fig = Figure(figsize=(6, 6), dpi=80)
+        # Matplotlib Figure (크기 고정)
+        self.fig = Figure(figsize=(7, 7), dpi=80)
+        self.fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)  # 여백 고정
         self.ax = self.fig.add_subplot(111, projection='3d')
 
         # Canvas
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
         self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas_widget = self.canvas.get_tk_widget()
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
 
         # Toolbar
         toolbar = NavigationToolbar2Tk(self.canvas, self.frame)
@@ -477,6 +479,9 @@ class ModelCheckerGUI:
         self.root.title("3D Model Checker GUI - Enhanced")
         self.root.geometry("1600x900")
 
+        # 창 최소 크기 설정 (레이아웃 고정)
+        self.root.minsize(1400, 800)
+
         # 루트 노드
         self.root_node = ComponentNode('root', 'assembly')
         self.components = {'root': self.root_node}
@@ -625,8 +630,13 @@ class ModelCheckerGUI:
         ttk.Label(form, text="형상 파라미터", font=('', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=2, padx=(5, 2))
         row += 1
 
+        # 형상 파라미터 컨테이너 (고정 높이로 위치 고정)
+        self.shape_params_container = ttk.Frame(form, height=120)
+        self.shape_params_container.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5, padx=5)
+        self.shape_params_container.grid_propagate(False)  # 고정 높이 유지
+
         # Box
-        self.box_frame = ttk.LabelFrame(form, text="Box", padding=5)
+        self.box_frame = ttk.LabelFrame(self.shape_params_container, text="Box", padding=5)
         self.L_var = tk.DoubleVar(value=0.0)
         self.W_var = tk.DoubleVar(value=0.0)
         self.T_var = tk.DoubleVar(value=0.0)
@@ -639,7 +649,7 @@ class ModelCheckerGUI:
         ttk.Entry(self.box_frame, textvariable=self.T_var, width=12).grid(row=2, column=1, sticky='ew', pady=2)
 
         # Cylinder
-        self.cyl_frame = ttk.LabelFrame(form, text="Cylinder", padding=5)
+        self.cyl_frame = ttk.LabelFrame(self.shape_params_container, text="Cylinder", padding=5)
         self.D_cyl_var = tk.DoubleVar(value=0.0)
         self.H_var = tk.DoubleVar(value=0.0)
 
@@ -647,15 +657,21 @@ class ModelCheckerGUI:
         ttk.Entry(self.cyl_frame, textvariable=self.D_cyl_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
         ttk.Label(self.cyl_frame, text="H:").grid(row=1, column=0, sticky='w', pady=2)
         ttk.Entry(self.cyl_frame, textvariable=self.H_var, width=12).grid(row=1, column=1, sticky='ew', pady=2)
+        # Sphere용 빈 공간 추가 (높이 맞추기)
+        ttk.Label(self.cyl_frame, text="").grid(row=2, column=0, sticky='w', pady=2)
 
         # Sphere
-        self.sphere_frame = ttk.LabelFrame(form, text="Sphere", padding=5)
+        self.sphere_frame = ttk.LabelFrame(self.shape_params_container, text="Sphere", padding=5)
         self.D_sphere_var = tk.DoubleVar(value=0.0)
 
         ttk.Label(self.sphere_frame, text="D:").grid(row=0, column=0, sticky='w', pady=2)
         ttk.Entry(self.sphere_frame, textvariable=self.D_sphere_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
+        # Box와 높이 맞추기 위한 빈 공간
+        ttk.Label(self.sphere_frame, text="").grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Label(self.sphere_frame, text="").grid(row=2, column=0, sticky='w', pady=2)
 
-        self.box_frame.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5, padx=5)
+        # 초기에는 box_frame만 표시
+        self.box_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
         row += 1
 
         ttk.Separator(form, orient='horizontal').grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
@@ -933,23 +949,28 @@ class ModelCheckerGUI:
     # ============================================================
 
     def on_type_change(self):
-        """타입 변경 시"""
+        """타입 변경 시 (고정 위치 유지)"""
         node_type = self.type_var.get()
 
-        self.box_frame.grid_remove()
-        self.cyl_frame.grid_remove()
-        self.sphere_frame.grid_remove()
+        # 형상 파라미터 프레임 숨기기 (place 사용)
+        self.box_frame.place_forget()
+        self.cyl_frame.place_forget()
+        self.sphere_frame.place_forget()
+
+        # 위치 파라미터는 grid 사용
         self.position_frame.grid_remove()
 
+        # 타입에 따라 적절한 프레임 표시
         if node_type == 'box':
-            self.box_frame.grid()
+            self.box_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.position_frame.grid()
         elif node_type == 'cyl':
-            self.cyl_frame.grid()
+            self.cyl_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.position_frame.grid()
         elif node_type == 'sphere':
-            self.sphere_frame.grid()
+            self.sphere_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.position_frame.grid()
+        # assembly는 형상/위치 파라미터 모두 숨김
 
     def browse_coord_file(self):
         """좌표 파일 찾기"""
