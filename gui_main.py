@@ -390,33 +390,44 @@ class Viewer3DPanel:
                     self.ax.add_collection3d(poly)
 
                     all_vertices.extend(vertices)
+                else:
+                    print(f"Warning: Shape has no vertices or triangles (v={len(vertices)}, t={len(triangles)})")
 
             except Exception as e:
                 print(f"Error rendering shape: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         # 축 범위 설정
         if all_vertices:
-            all_vertices = np.array(all_vertices)
-            max_range = np.array([
-                all_vertices[:, 0].max() - all_vertices[:, 0].min(),
-                all_vertices[:, 1].max() - all_vertices[:, 1].min(),
-                all_vertices[:, 2].max() - all_vertices[:, 2].min()
-            ]).max() / 2.0
+            try:
+                all_vertices = np.array(all_vertices)
+                max_range = np.array([
+                    all_vertices[:, 0].max() - all_vertices[:, 0].min(),
+                    all_vertices[:, 1].max() - all_vertices[:, 1].min(),
+                    all_vertices[:, 2].max() - all_vertices[:, 2].min()
+                ]).max() / 2.0
 
-            mid_x = (all_vertices[:, 0].max() + all_vertices[:, 0].min()) * 0.5
-            mid_y = (all_vertices[:, 1].max() + all_vertices[:, 1].min()) * 0.5
-            mid_z = (all_vertices[:, 2].max() + all_vertices[:, 2].min()) * 0.5
+                mid_x = (all_vertices[:, 0].max() + all_vertices[:, 0].min()) * 0.5
+                mid_y = (all_vertices[:, 1].max() + all_vertices[:, 1].min()) * 0.5
+                mid_z = (all_vertices[:, 2].max() + all_vertices[:, 2].min()) * 0.5
 
-            self.ax.set_xlim(mid_x - max_range, mid_x + max_range)
-            self.ax.set_ylim(mid_y - max_range, mid_y + max_range)
-            self.ax.set_zlim(mid_z - max_range, mid_z + max_range)
+                self.ax.set_xlim(mid_x - max_range, mid_x + max_range)
+                self.ax.set_ylim(mid_y - max_range, mid_y + max_range)
+                self.ax.set_zlim(mid_z - max_range, mid_z + max_range)
+            except Exception as e:
+                print(f"Error setting axis limits: {e}")
+                # 기본 범위 설정
+                self.ax.set_xlim(-50, 50)
+                self.ax.set_ylim(-50, 50)
+                self.ax.set_zlim(-50, 50)
 
     def _tessellate_shape(self, shape):
         """CadQuery 형상을 삼각형 메시로 변환"""
         # Tessellate using CadQuery
-        vertices = []
-        triangles = []
+        all_vertices = []
+        all_triangles = []
 
         try:
             # Get faces
@@ -429,23 +440,30 @@ class Viewer3DPanel:
                 if len(face_data) == 2:
                     verts, tris = face_data
 
-                    # 인덱스 오프셋
-                    offset = len(vertices)
-                    vertices.extend(verts)
+                    # vertices를 numpy 배열로 변환
+                    verts_array = np.array(verts)
 
-                    # 삼각형 생성
+                    # 인덱스 오프셋
+                    offset = len(all_vertices)
+
+                    # 전체 vertices에 추가
+                    all_vertices.extend(verts)
+
+                    # 삼각형 생성 (각 삼각형은 3x3 numpy 배열)
                     for tri in tris:
-                        triangle = [
-                            vertices[offset + tri[0]],
-                            vertices[offset + tri[1]],
-                            vertices[offset + tri[2]]
-                        ]
-                        triangles.append(triangle)
+                        triangle = np.array([
+                            verts[tri[0]],
+                            verts[tri[1]],
+                            verts[tri[2]]
+                        ])
+                        all_triangles.append(triangle)
 
         except Exception as e:
             print(f"Tessellation error: {e}")
+            import traceback
+            traceback.print_exc()
 
-        return vertices, triangles
+        return all_vertices, all_triangles
 
 
 # ============================================================
