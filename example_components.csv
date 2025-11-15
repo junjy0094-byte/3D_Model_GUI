@@ -1,0 +1,18 @@
+name,type,parent,L,W,T,D,H,cx,cy,cz,color,coord_file,coord_has_header
+# 예제 Assembly 구조
+# Assembly 1: 베이스
+base,assembly,root,,,,,,,,,,true
+base_plate,box,base,100,100,5,,,0,0,0,lightgray,,true
+
+# Assembly 2: 기둥들
+pillars,assembly,base,,,,,,,,,,true
+pillar1,cyl,pillars,,,,,10,5,-40,-40,5,steelblue,,true
+pillar2,cyl,pillars,,,,,10,5,40,-40,5,steelblue,,true
+pillar3,cyl,pillars,,,,,10,5,-40,40,5,steelblue,,true
+pillar4,cyl,pillars,,,,,10,5,40,40,5,steelblue,,true
+
+# 상단 플레이트
+top_plate,box,base,80,80,3,,,0,0,15,lightblue,,true
+
+# 중앙 구
+center_sphere,sphere,base,,,,10,,0,0,20,gold,,true

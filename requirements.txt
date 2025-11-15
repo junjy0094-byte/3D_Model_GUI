@@ -1,0 +1,10 @@
+# 3D Model Checker GUI Dependencies
+
+# Core 3D modeling
+cadquery>=2.0
+jupyter-cadquery
+
+# Data handling
+pandas
+
+# GUI (tkinter는 Python 기본 포함)
