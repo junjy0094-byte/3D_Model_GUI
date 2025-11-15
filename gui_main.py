@@ -440,22 +440,17 @@ class Viewer3DPanel:
                 if len(face_data) == 2:
                     verts, tris = face_data
 
-                    # vertices를 numpy 배열로 변환
-                    verts_array = np.array(verts)
+                    # vertices를 numpy 배열로 변환 (튜플 리스트 -> (N, 3) 배열)
+                    verts_array = np.array(verts, dtype=np.float64)
 
-                    # 인덱스 오프셋
-                    offset = len(all_vertices)
-
-                    # 전체 vertices에 추가
+                    # 전체 vertices에 추가 (원본 형태로)
                     all_vertices.extend(verts)
 
-                    # 삼각형 생성 (각 삼각형은 3x3 numpy 배열)
+                    # 삼각형 생성 (각 삼각형은 (3, 3) numpy 배열)
                     for tri in tris:
-                        triangle = np.array([
-                            verts[tri[0]],
-                            verts[tri[1]],
-                            verts[tri[2]]
-                        ])
+                        # tri는 [idx0, idx1, idx2] 형태의 인덱스 배열
+                        # verts_array[tri]로 직접 인덱싱하면 (3, 3) 배열 생성
+                        triangle = verts_array[list(tri)]
                         all_triangles.append(triangle)
 
         except Exception as e:
