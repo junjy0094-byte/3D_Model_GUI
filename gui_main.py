@@ -440,11 +440,15 @@ class Viewer3DPanel:
                 if len(face_data) == 2:
                     verts, tris = face_data
 
-                    # vertices를 numpy 배열로 변환 (튜플 리스트 -> (N, 3) 배열)
-                    verts_array = np.array(verts, dtype=np.float64)
+                    # Vector 객체를 (x, y, z) 튜플로 변환
+                    # CadQuery의 Vector 객체는 .toTuple() 메서드를 가지고 있음
+                    verts_list = [v.toTuple() if hasattr(v, 'toTuple') else (v.x, v.y, v.z) for v in verts]
 
-                    # 전체 vertices에 추가 (원본 형태로)
-                    all_vertices.extend(verts)
+                    # vertices를 numpy 배열로 변환 (튜플 리스트 -> (N, 3) 배열)
+                    verts_array = np.array(verts_list, dtype=np.float64)
+
+                    # 전체 vertices에 추가 (튜플 형태로)
+                    all_vertices.extend(verts_list)
 
                     # 삼각형 생성 (각 삼각형은 (3, 3) numpy 배열)
                     for tri in tris:
