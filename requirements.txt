@@ -7,4 +7,9 @@ jupyter-cadquery
 # Data handling
 pandas
 
+# 3D Visualization (GUI 내부 미리보기)
+matplotlib>=3.5.0
+numpy>=1.20.0
+numpy-stl
+
 # GUI (tkinter는 Python 기본 포함)

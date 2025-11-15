@@ -1,13 +1,183 @@
 #!/usr/bin/env python3
 """
-3D Model Checker GUI
-Assembly 구조를 GUI로 편집하고 CSV로 저장하는 도구
+3D Model Checker GUI (Enhanced Version)
+- 3D 미리보기 패널 통합
+- 드래그 앤 드롭 계층 변경
+- Undo/Redo 기능
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import csv
 import os
+from typing import Optional, List, Dict, Any
+import copy
+
+# 3D Visualization
+import matplotlib
+matplotlib.use('TkAgg')
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import numpy as np
+
+try:
+    import cadquery as cq
+    CADQUERY_AVAILABLE = True
+except ImportError:
+    CADQUERY_AVAILABLE = False
+    print("Warning: CadQuery not available. 3D preview will be limited.")
+
+
+# ============================================================
+# Command Pattern for Undo/Redo
+# ============================================================
+
+class Command:
+    """명령 베이스 클래스"""
+    def execute(self) -> bool:
+        """명령 실행"""
+        raise NotImplementedError
+
+    def undo(self) -> bool:
+        """명령 취소"""
+        raise NotImplementedError
+
+    def get_description(self) -> str:
+        """명령 설명"""
+        return "Command"
+
+
+class AddComponentCommand(Command):
+    """컴포넌트 추가 명령"""
+    def __init__(self, gui, node_data: Dict[str, Any]):
+        self.gui = gui
+        self.node_data = copy.deepcopy(node_data)
+        self.name = node_data['name']
+
+    def execute(self) -> bool:
+        return self.gui._add_component_impl(self.node_data)
+
+    def undo(self) -> bool:
+        return self.gui._delete_component_impl(self.name)
+
+    def get_description(self) -> str:
+        return f"Add '{self.name}'"
+
+
+class DeleteComponentCommand(Command):
+    """컴포넌트 삭제 명령"""
+    def __init__(self, gui, name: str):
+        self.gui = gui
+        self.name = name
+        # 삭제 전 데이터 백업 (자식 포함)
+        self.backup_data = self.gui._backup_subtree(name)
+
+    def execute(self) -> bool:
+        return self.gui._delete_component_impl(self.name)
+
+    def undo(self) -> bool:
+        return self.gui._restore_subtree(self.backup_data)
+
+    def get_description(self) -> str:
+        return f"Delete '{self.name}'"
+
+
+class UpdateComponentCommand(Command):
+    """컴포넌트 수정 명령"""
+    def __init__(self, gui, name: str, old_data: Dict[str, Any], new_data: Dict[str, Any]):
+        self.gui = gui
+        self.name = name
+        self.old_data = copy.deepcopy(old_data)
+        self.new_data = copy.deepcopy(new_data)
+
+    def execute(self) -> bool:
+        return self.gui._update_component_impl(self.name, self.new_data)
+
+    def undo(self) -> bool:
+        return self.gui._update_component_impl(self.name, self.old_data)
+
+    def get_description(self) -> str:
+        return f"Update '{self.name}'"
+
+
+class MoveComponentCommand(Command):
+    """컴포넌트 이동 명령 (부모 변경)"""
+    def __init__(self, gui, name: str, old_parent: str, new_parent: str):
+        self.gui = gui
+        self.name = name
+        self.old_parent = old_parent
+        self.new_parent = new_parent
+
+    def execute(self) -> bool:
+        return self.gui._move_component_impl(self.name, self.new_parent)
+
+    def undo(self) -> bool:
+        return self.gui._move_component_impl(self.name, self.old_parent)
+
+    def get_description(self) -> str:
+        return f"Move '{self.name}' to '{self.new_parent}'"
+
+
+class CommandHistory:
+    """명령 히스토리 관리"""
+    def __init__(self, max_size: int = 50):
+        self.max_size = max_size
+        self.undo_stack: List[Command] = []
+        self.redo_stack: List[Command] = []
+
+    def execute(self, command: Command) -> bool:
+        """명령 실행 및 히스토리에 추가"""
+        if command.execute():
+            self.undo_stack.append(command)
+            if len(self.undo_stack) > self.max_size:
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()  # 새 명령 실행 시 redo 스택 초기화
+            return True
+        return False
+
+    def undo(self) -> bool:
+        """마지막 명령 취소"""
+        if not self.undo_stack:
+            return False
+
+        command = self.undo_stack.pop()
+        if command.undo():
+            self.redo_stack.append(command)
+            return True
+        else:
+            self.undo_stack.append(command)  # 실패 시 다시 추가
+            return False
+
+    def redo(self) -> bool:
+        """취소한 명령 재실행"""
+        if not self.redo_stack:
+            return False
+
+        command = self.redo_stack.pop()
+        if command.execute():
+            self.undo_stack.append(command)
+            return True
+        else:
+            self.redo_stack.append(command)  # 실패 시 다시 추가
+            return False
+
+    def can_undo(self) -> bool:
+        return len(self.undo_stack) > 0
+
+    def can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    def clear(self):
+        """히스토리 초기화"""
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+
+
+# ============================================================
+# Component Node
+# ============================================================
 
 class ComponentNode:
     """컴포넌트 트리 노드"""
@@ -18,11 +188,11 @@ class ComponentNode:
         self.children = []
 
         # 형상 파라미터
-        self.L = 0.0  # Box: Length
-        self.W = 0.0  # Box: Width
-        self.T = 0.0  # Box: Thickness
-        self.D = 0.0  # Cylinder/Sphere: Diameter
-        self.H = 0.0  # Cylinder: Height
+        self.L = 0.0
+        self.W = 0.0
+        self.T = 0.0
+        self.D = 0.0
+        self.H = 0.0
 
         # 위치 파라미터
         self.cx = 0.0
@@ -36,8 +206,15 @@ class ComponentNode:
 
     def add_child(self, child):
         """자식 노드 추가"""
-        self.children.append(child)
+        if child not in self.children:
+            self.children.append(child)
         child.parent = self
+
+    def remove_child(self, child):
+        """자식 노드 제거"""
+        if child in self.children:
+            self.children.remove(child)
+        child.parent = None
 
     def to_dict(self):
         """CSV 저장을 위한 딕셔너리 변환"""
@@ -59,37 +236,272 @@ class ComponentNode:
             'coord_has_header': 'true' if self.coord_has_header else 'false'
         }
 
+    def get_data_dict(self):
+        """내부 데이터를 딕셔너리로 (Undo/Redo용)"""
+        return {
+            'name': self.name,
+            'type': self.type,
+            'parent': self.parent.name if self.parent else 'root',
+            'L': self.L,
+            'W': self.W,
+            'T': self.T,
+            'D': self.D,
+            'H': self.H,
+            'cx': self.cx,
+            'cy': self.cy,
+            'cz': self.cz,
+            'color': self.color,
+            'coord_file': self.coord_file,
+            'coord_has_header': self.coord_has_header
+        }
+
+    def set_from_dict(self, data: Dict[str, Any]):
+        """딕셔너리에서 데이터 설정"""
+        self.type = data.get('type', self.type)
+        self.L = data.get('L', 0.0)
+        self.W = data.get('W', 0.0)
+        self.T = data.get('T', 0.0)
+        self.D = data.get('D', 0.0)
+        self.H = data.get('H', 0.0)
+        self.cx = data.get('cx', 0.0)
+        self.cy = data.get('cy', 0.0)
+        self.cz = data.get('cz', 0.0)
+        self.color = data.get('color', '')
+        self.coord_file = data.get('coord_file', '')
+        self.coord_has_header = data.get('coord_has_header', True)
+
+
+# ============================================================
+# 3D Viewer Panel
+# ============================================================
+
+class Viewer3DPanel:
+    """3D 미리보기 패널"""
+    def __init__(self, parent):
+        self.frame = ttk.LabelFrame(parent, text="3D 미리보기", padding=5)
+
+        # Matplotlib Figure
+        self.fig = Figure(figsize=(6, 6), dpi=80)
+        self.ax = self.fig.add_subplot(111, projection='3d')
+
+        # Canvas
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Toolbar
+        toolbar = NavigationToolbar2Tk(self.canvas, self.frame)
+        toolbar.update()
+
+        # 초기 설정
+        self.setup_axes()
+
+    def setup_axes(self):
+        """축 설정"""
+        self.ax.set_xlabel('X')
+        self.ax.set_ylabel('Y')
+        self.ax.set_zlabel('Z')
+        self.ax.set_title('3D Preview')
+
+    def clear(self):
+        """화면 초기화"""
+        self.ax.clear()
+        self.setup_axes()
+        self.canvas.draw()
+
+    def render_components(self, components: Dict[str, ComponentNode]):
+        """컴포넌트들을 3D로 렌더링"""
+        self.ax.clear()
+        self.setup_axes()
+
+        if not CADQUERY_AVAILABLE:
+            self.ax.text(0, 0, 0, 'CadQuery not available', fontsize=12)
+            self.canvas.draw()
+            return
+
+        # 모든 형상 수집
+        shapes = []
+        colors = []
+
+        for name, node in components.items():
+            if node.type == 'assembly' or name == 'root':
+                continue
+
+            try:
+                # 형상 생성
+                shape = self._create_shape(node)
+                if shape is not None:
+                    shapes.append(shape)
+                    colors.append(node.color if node.color else 'lightblue')
+            except Exception as e:
+                print(f"Error creating shape for {name}: {e}")
+                continue
+
+        # 렌더링
+        if shapes:
+            self._render_shapes(shapes, colors)
+
+        self.canvas.draw()
+
+    def _create_shape(self, node: ComponentNode):
+        """노드에서 CadQuery 형상 생성"""
+        if node.type == 'box':
+            if node.L <= 0 or node.W <= 0 or node.T <= 0:
+                return None
+            shape = cq.Workplane("XY").box(node.L, node.W, node.T).val()
+            # 위치 이동
+            center_z = node.cz + node.T / 2
+            shape = shape.translate((node.cx, node.cy, center_z))
+            return shape
+
+        elif node.type == 'cyl':
+            if node.D <= 0 or node.H <= 0:
+                return None
+            shape = cq.Workplane("XY").circle(node.D/2).extrude(node.H).val()
+            # 위치 이동
+            center_z = node.cz + node.H / 2
+            shape = shape.translate((node.cx, node.cy, center_z - node.H/2))
+            return shape
+
+        elif node.type == 'sphere':
+            if node.D <= 0:
+                return None
+            shape = cq.Workplane("XY").sphere(node.D/2).val()
+            # 위치 이동
+            center_z = node.cz + node.D / 2
+            shape = shape.translate((node.cx, node.cy, center_z))
+            return shape
+
+        return None
+
+    def _render_shapes(self, shapes, colors):
+        """CadQuery 형상들을 matplotlib로 렌더링"""
+        all_vertices = []
+
+        for shape, color in zip(shapes, colors):
+            try:
+                # Tessellate
+                vertices, triangles = self._tessellate_shape(shape)
+
+                if len(vertices) > 0 and len(triangles) > 0:
+                    # 삼각형 메시 생성
+                    poly = Poly3DCollection(triangles, alpha=0.7, linewidths=0.5, edgecolors='black')
+                    poly.set_facecolor(color)
+                    self.ax.add_collection3d(poly)
+
+                    all_vertices.extend(vertices)
+
+            except Exception as e:
+                print(f"Error rendering shape: {e}")
+                continue
+
+        # 축 범위 설정
+        if all_vertices:
+            all_vertices = np.array(all_vertices)
+            max_range = np.array([
+                all_vertices[:, 0].max() - all_vertices[:, 0].min(),
+                all_vertices[:, 1].max() - all_vertices[:, 1].min(),
+                all_vertices[:, 2].max() - all_vertices[:, 2].min()
+            ]).max() / 2.0
+
+            mid_x = (all_vertices[:, 0].max() + all_vertices[:, 0].min()) * 0.5
+            mid_y = (all_vertices[:, 1].max() + all_vertices[:, 1].min()) * 0.5
+            mid_z = (all_vertices[:, 2].max() + all_vertices[:, 2].min()) * 0.5
+
+            self.ax.set_xlim(mid_x - max_range, mid_x + max_range)
+            self.ax.set_ylim(mid_y - max_range, mid_y + max_range)
+            self.ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+    def _tessellate_shape(self, shape):
+        """CadQuery 형상을 삼각형 메시로 변환"""
+        # Tessellate using CadQuery
+        vertices = []
+        triangles = []
+
+        try:
+            # Get faces
+            faces = shape.Faces()
+
+            for face in faces:
+                # Get vertices and triangles from face
+                face_data = face.tessellate(0.1)  # tolerance
+
+                if len(face_data) == 2:
+                    verts, tris = face_data
+
+                    # 인덱스 오프셋
+                    offset = len(vertices)
+                    vertices.extend(verts)
+
+                    # 삼각형 생성
+                    for tri in tris:
+                        triangle = [
+                            vertices[offset + tri[0]],
+                            vertices[offset + tri[1]],
+                            vertices[offset + tri[2]]
+                        ]
+                        triangles.append(triangle)
+
+        except Exception as e:
+            print(f"Tessellation error: {e}")
+
+        return vertices, triangles
+
+
+# ============================================================
+# Main GUI
+# ============================================================
 
 class ModelCheckerGUI:
-    """3D Model Checker GUI 메인 클래스"""
+    """3D Model Checker GUI 메인 클래스 (Enhanced)"""
 
     def __init__(self, root):
         self.root = root
-        self.root.title("3D Model Checker GUI")
-        self.root.geometry("1000x700")
+        self.root.title("3D Model Checker GUI - Enhanced")
+        self.root.geometry("1600x900")
 
-        # 루트 노드 (항상 존재)
+        # 루트 노드
         self.root_node = ComponentNode('root', 'assembly')
-        self.components = {'root': self.root_node}  # name -> ComponentNode
+        self.components = {'root': self.root_node}
+
+        # Command History
+        self.history = CommandHistory()
+
+        # 드래그 앤 드롭 상태
+        self.drag_item = None
 
         self.setup_ui()
+        self.setup_keyboard_shortcuts()
+
+    def setup_keyboard_shortcuts(self):
+        """키보드 단축키 설정"""
+        self.root.bind('<Control-z>', lambda e: self.undo())
+        self.root.bind('<Control-y>', lambda e: self.redo())
+        self.root.bind('<Control-s>', lambda e: self.save_csv())
+        self.root.bind('<Control-o>', lambda e: self.load_csv())
+        self.root.bind('<F5>', lambda e: self.refresh_3d_view())
 
     def setup_ui(self):
-        """UI 구성"""
-        # 메인 프레임 (좌우 분할)
+        """UI 구성 (3분할 레이아웃)"""
+        # 메인 프레임
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 좌측: 트리 뷰
+        # 좌측: 트리 뷰 (30%)
         left_frame = ttk.LabelFrame(main_frame, text="Assembly 구조", padding=5)
-        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 3))
 
-        # 우측: 입력 폼
-        right_frame = ttk.LabelFrame(main_frame, text="컴포넌트 추가/편집", padding=5)
-        right_frame.grid(row=0, column=1, sticky='nsew')
+        # 중앙: 3D 뷰어 (40%)
+        self.viewer_3d = Viewer3DPanel(main_frame)
+        self.viewer_3d.frame.grid(row=0, column=1, sticky='nsew', padx=3)
 
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=2)
+        # 우측: 입력 폼 (30%)
+        right_frame = ttk.LabelFrame(main_frame, text="컴포넌트 편집", padding=5)
+        right_frame.grid(row=0, column=2, sticky='nsew', padx=(3, 0))
+
+        main_frame.columnconfigure(0, weight=3)
+        main_frame.columnconfigure(1, weight=4)
+        main_frame.columnconfigure(2, weight=3)
         main_frame.rowconfigure(0, weight=1)
 
         # === 좌측 트리 뷰 ===
@@ -99,16 +511,18 @@ class ModelCheckerGUI:
         self.setup_input_form(right_frame)
 
         # === 하단 버튼 ===
-        button_frame = ttk.Frame(self.root)
-        button_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        ttk.Button(button_frame, text="CSV 저장", command=self.save_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="CSV 불러오기", command=self.load_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="3D 뷰어 실행", command=self.run_3d_viewer).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="종료", command=self.root.quit).pack(side=tk.RIGHT, padx=2)
+        self.setup_bottom_buttons()
 
     def setup_tree_view(self, parent):
         """트리 뷰 설정"""
+        # 버튼 프레임
+        btn_frame = ttk.Frame(parent)
+        btn_frame.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Button(btn_frame, text="↶ Undo", command=self.undo, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="↷ Redo", command=self.redo, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="🗑 삭제", command=self.delete_component, width=8).pack(side=tk.RIGHT, padx=2)
+
         # 스크롤바
         tree_scroll = ttk.Scrollbar(parent)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -120,9 +534,9 @@ class ModelCheckerGUI:
 
         # 컬럼 설정
         self.tree['columns'] = ('type', 'dimensions')
-        self.tree.column('#0', width=200, minwidth=150)
-        self.tree.column('type', width=80, minwidth=50)
-        self.tree.column('dimensions', width=150, minwidth=100)
+        self.tree.column('#0', width=180, minwidth=120)
+        self.tree.column('type', width=70, minwidth=50)
+        self.tree.column('dimensions', width=120, minwidth=80)
 
         self.tree.heading('#0', text='이름')
         self.tree.heading('type', text='타입')
@@ -131,11 +545,11 @@ class ModelCheckerGUI:
         # ROOT 추가
         self.tree.insert('', 'end', 'root', text='ROOT', values=('assembly', ''), open=True)
 
-        # 선택 이벤트
+        # 이벤트 바인딩
         self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
-
-        # 우클릭 메뉴
-        self.tree.bind('<Button-3>', self.show_context_menu)
+        self.tree.bind('<Button-1>', self.on_tree_click)
+        self.tree.bind('<B1-Motion>', self.on_tree_drag)
+        self.tree.bind('<ButtonRelease-1>', self.on_tree_drop)
 
     def setup_input_form(self, parent):
         """입력 폼 설정"""
@@ -159,31 +573,31 @@ class ModelCheckerGUI:
         row = 0
 
         # 이름
-        ttk.Label(form, text="이름:").grid(row=row, column=0, sticky='w', pady=2)
+        ttk.Label(form, text="이름:").grid(row=row, column=0, sticky='w', pady=2, padx=(5, 2))
         self.name_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self.name_var, width=30).grid(row=row, column=1, sticky='ew', pady=2)
+        ttk.Entry(form, textvariable=self.name_var, width=25).grid(row=row, column=1, sticky='ew', pady=2, padx=(2, 5))
         row += 1
 
         # 타입
-        ttk.Label(form, text="타입:").grid(row=row, column=0, sticky='w', pady=2)
+        ttk.Label(form, text="타입:").grid(row=row, column=0, sticky='w', pady=2, padx=(5, 2))
         self.type_var = tk.StringVar(value='box')
         type_frame = ttk.Frame(form)
-        type_frame.grid(row=row, column=1, sticky='w', pady=2)
-        ttk.Radiobutton(type_frame, text='Assembly', variable=self.type_var,
-                       value='assembly', command=self.on_type_change).pack(side=tk.LEFT)
+        type_frame.grid(row=row, column=1, sticky='w', pady=2, padx=(2, 5))
+        ttk.Radiobutton(type_frame, text='Asm', variable=self.type_var,
+                       value='assembly', command=self.on_type_change).pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(type_frame, text='Box', variable=self.type_var,
-                       value='box', command=self.on_type_change).pack(side=tk.LEFT)
-        ttk.Radiobutton(type_frame, text='Cylinder', variable=self.type_var,
-                       value='cyl', command=self.on_type_change).pack(side=tk.LEFT)
-        ttk.Radiobutton(type_frame, text='Sphere', variable=self.type_var,
-                       value='sphere', command=self.on_type_change).pack(side=tk.LEFT)
+                       value='box', command=self.on_type_change).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(type_frame, text='Cyl', variable=self.type_var,
+                       value='cyl', command=self.on_type_change).pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(type_frame, text='Sph', variable=self.type_var,
+                       value='sphere', command=self.on_type_change).pack(side=tk.LEFT, padx=2)
         row += 1
 
         # 부모 선택
-        ttk.Label(form, text="부모:").grid(row=row, column=0, sticky='w', pady=2)
+        ttk.Label(form, text="부모:").grid(row=row, column=0, sticky='w', pady=2, padx=(5, 2))
         self.parent_var = tk.StringVar(value='root')
-        self.parent_combo = ttk.Combobox(form, textvariable=self.parent_var, width=28)
-        self.parent_combo.grid(row=row, column=1, sticky='ew', pady=2)
+        self.parent_combo = ttk.Combobox(form, textvariable=self.parent_var, width=23)
+        self.parent_combo.grid(row=row, column=1, sticky='ew', pady=2, padx=(2, 5))
         self.update_parent_combo()
         row += 1
 
@@ -191,48 +605,47 @@ class ModelCheckerGUI:
         row += 1
 
         # === 형상 파라미터 ===
-        ttk.Label(form, text="형상 파라미터", font=('', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=2)
+        ttk.Label(form, text="형상 파라미터", font=('', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=2, padx=(5, 2))
         row += 1
 
-        # Box 파라미터
-        self.box_frame = ttk.LabelFrame(form, text="Box")
+        # Box
+        self.box_frame = ttk.LabelFrame(form, text="Box", padding=5)
         self.L_var = tk.DoubleVar(value=0.0)
         self.W_var = tk.DoubleVar(value=0.0)
         self.T_var = tk.DoubleVar(value=0.0)
 
-        ttk.Label(self.box_frame, text="L (길이):").grid(row=0, column=0, sticky='w', pady=2)
-        ttk.Entry(self.box_frame, textvariable=self.L_var, width=15).grid(row=0, column=1, sticky='ew', pady=2)
-        ttk.Label(self.box_frame, text="W (너비):").grid(row=1, column=0, sticky='w', pady=2)
-        ttk.Entry(self.box_frame, textvariable=self.W_var, width=15).grid(row=1, column=1, sticky='ew', pady=2)
-        ttk.Label(self.box_frame, text="T (두께):").grid(row=2, column=0, sticky='w', pady=2)
-        ttk.Entry(self.box_frame, textvariable=self.T_var, width=15).grid(row=2, column=1, sticky='ew', pady=2)
+        ttk.Label(self.box_frame, text="L:").grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Entry(self.box_frame, textvariable=self.L_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
+        ttk.Label(self.box_frame, text="W:").grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Entry(self.box_frame, textvariable=self.W_var, width=12).grid(row=1, column=1, sticky='ew', pady=2)
+        ttk.Label(self.box_frame, text="T:").grid(row=2, column=0, sticky='w', pady=2)
+        ttk.Entry(self.box_frame, textvariable=self.T_var, width=12).grid(row=2, column=1, sticky='ew', pady=2)
 
-        # Cylinder 파라미터
-        self.cyl_frame = ttk.LabelFrame(form, text="Cylinder")
+        # Cylinder
+        self.cyl_frame = ttk.LabelFrame(form, text="Cylinder", padding=5)
         self.D_cyl_var = tk.DoubleVar(value=0.0)
         self.H_var = tk.DoubleVar(value=0.0)
 
-        ttk.Label(self.cyl_frame, text="D (직경):").grid(row=0, column=0, sticky='w', pady=2)
-        ttk.Entry(self.cyl_frame, textvariable=self.D_cyl_var, width=15).grid(row=0, column=1, sticky='ew', pady=2)
-        ttk.Label(self.cyl_frame, text="H (높이):").grid(row=1, column=0, sticky='w', pady=2)
-        ttk.Entry(self.cyl_frame, textvariable=self.H_var, width=15).grid(row=1, column=1, sticky='ew', pady=2)
+        ttk.Label(self.cyl_frame, text="D:").grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Entry(self.cyl_frame, textvariable=self.D_cyl_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
+        ttk.Label(self.cyl_frame, text="H:").grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Entry(self.cyl_frame, textvariable=self.H_var, width=12).grid(row=1, column=1, sticky='ew', pady=2)
 
-        # Sphere 파라미터
-        self.sphere_frame = ttk.LabelFrame(form, text="Sphere")
+        # Sphere
+        self.sphere_frame = ttk.LabelFrame(form, text="Sphere", padding=5)
         self.D_sphere_var = tk.DoubleVar(value=0.0)
 
-        ttk.Label(self.sphere_frame, text="D (직경):").grid(row=0, column=0, sticky='w', pady=2)
-        ttk.Entry(self.sphere_frame, textvariable=self.D_sphere_var, width=15).grid(row=0, column=1, sticky='ew', pady=2)
+        ttk.Label(self.sphere_frame, text="D:").grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Entry(self.sphere_frame, textvariable=self.D_sphere_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
 
-        # 형상 프레임 배치 (초기: box만 표시)
-        self.box_frame.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
+        self.box_frame.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5, padx=5)
         row += 1
 
         ttk.Separator(form, orient='horizontal').grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
         row += 1
 
         # === 위치 파라미터 ===
-        ttk.Label(form, text="위치 파라미터", font=('', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=2)
+        ttk.Label(form, text="위치", font=('', 9, 'bold')).grid(row=row, column=0, columnspan=2, sticky='w', pady=2, padx=(5, 2))
         row += 1
 
         self.position_frame = ttk.Frame(form)
@@ -240,59 +653,277 @@ class ModelCheckerGUI:
         self.cy_var = tk.DoubleVar(value=0.0)
         self.cz_var = tk.DoubleVar(value=0.0)
 
-        ttk.Label(self.position_frame, text="cx (X):").grid(row=0, column=0, sticky='w', pady=2)
-        ttk.Entry(self.position_frame, textvariable=self.cx_var, width=15).grid(row=0, column=1, sticky='ew', pady=2)
-        ttk.Label(self.position_frame, text="cy (Y):").grid(row=1, column=0, sticky='w', pady=2)
-        ttk.Entry(self.position_frame, textvariable=self.cy_var, width=15).grid(row=1, column=1, sticky='ew', pady=2)
-        ttk.Label(self.position_frame, text="cz (Z 바닥):").grid(row=2, column=0, sticky='w', pady=2)
-        ttk.Entry(self.position_frame, textvariable=self.cz_var, width=15).grid(row=2, column=1, sticky='ew', pady=2)
+        ttk.Label(self.position_frame, text="cx:").grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Entry(self.position_frame, textvariable=self.cx_var, width=12).grid(row=0, column=1, sticky='ew', pady=2)
+        ttk.Label(self.position_frame, text="cy:").grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Entry(self.position_frame, textvariable=self.cy_var, width=12).grid(row=1, column=1, sticky='ew', pady=2)
+        ttk.Label(self.position_frame, text="cz:").grid(row=2, column=0, sticky='w', pady=2)
+        ttk.Entry(self.position_frame, textvariable=self.cz_var, width=12).grid(row=2, column=1, sticky='ew', pady=2)
 
-        self.position_frame.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
+        self.position_frame.grid(row=row, column=0, columnspan=2, sticky='ew', pady=5, padx=5)
         row += 1
 
         ttk.Separator(form, orient='horizontal').grid(row=row, column=0, columnspan=2, sticky='ew', pady=5)
         row += 1
 
         # === 기타 ===
-        ttk.Label(form, text="색상 (선택):").grid(row=row, column=0, sticky='w', pady=2)
+        ttk.Label(form, text="색상:").grid(row=row, column=0, sticky='w', pady=2, padx=(5, 2))
         self.color_var = tk.StringVar()
-        ttk.Entry(form, textvariable=self.color_var, width=30).grid(row=row, column=1, sticky='ew', pady=2)
+        ttk.Entry(form, textvariable=self.color_var, width=25).grid(row=row, column=1, sticky='ew', pady=2, padx=(2, 5))
         row += 1
 
-        ttk.Label(form, text="좌표 파일 (패턴):").grid(row=row, column=0, sticky='w', pady=2)
+        ttk.Label(form, text="좌표 파일:").grid(row=row, column=0, sticky='w', pady=2, padx=(5, 2))
         coord_frame = ttk.Frame(form)
-        coord_frame.grid(row=row, column=1, sticky='ew', pady=2)
+        coord_frame.grid(row=row, column=1, sticky='ew', pady=2, padx=(2, 5))
         self.coord_file_var = tk.StringVar()
-        ttk.Entry(coord_frame, textvariable=self.coord_file_var, width=20).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(coord_frame, text="찾기", command=self.browse_coord_file, width=5).pack(side=tk.LEFT, padx=(2, 0))
+        ttk.Entry(coord_frame, textvariable=self.coord_file_var, width=15).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(coord_frame, text="...", command=self.browse_coord_file, width=3).pack(side=tk.LEFT, padx=(2, 0))
         row += 1
 
         self.coord_header_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(form, text="좌표 파일 헤더 있음", variable=self.coord_header_var).grid(row=row, column=1, sticky='w', pady=2)
+        ttk.Checkbutton(form, text="헤더 있음", variable=self.coord_header_var).grid(row=row, column=1, sticky='w', pady=2, padx=(2, 5))
         row += 1
 
         # 버튼
         button_frame = ttk.Frame(form)
         button_frame.grid(row=row, column=0, columnspan=2, pady=10)
-        ttk.Button(button_frame, text="추가", command=self.add_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="수정", command=self.update_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="삭제", command=self.delete_component).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="초기화", command=self.clear_form).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="추가", command=self.add_component, width=10).pack(side=tk.LEFT, padx=3)
+        ttk.Button(button_frame, text="수정", command=self.update_component, width=10).pack(side=tk.LEFT, padx=3)
+        ttk.Button(button_frame, text="초기화", command=self.clear_form, width=10).pack(side=tk.LEFT, padx=3)
+        row += 1
 
-        # 초기 타입 변경
+        # 실시간 미리보기 버튼
+        ttk.Button(form, text="🔄 3D 새로고침 (F5)", command=self.refresh_3d_view).grid(row=row, column=0, columnspan=2, pady=5, sticky='ew', padx=5)
+        row += 1
+
         self.on_type_change()
 
+    def setup_bottom_buttons(self):
+        """하단 버튼"""
+        button_frame = ttk.Frame(self.root)
+        button_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Button(button_frame, text="💾 CSV 저장 (Ctrl+S)", command=self.save_csv).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="📂 CSV 불러오기 (Ctrl+O)", command=self.load_csv).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="🚀 3D 뷰어 실행 (Jupyter)", command=self.run_3d_viewer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="종료", command=self.root.quit).pack(side=tk.RIGHT, padx=2)
+
+    # ============================================================
+    # Drag & Drop
+    # ============================================================
+
+    def on_tree_click(self, event):
+        """트리 클릭 시작"""
+        item = self.tree.identify('item', event.x, event.y)
+        if item:
+            self.drag_item = item
+
+    def on_tree_drag(self, event):
+        """드래그 중"""
+        if self.drag_item:
+            # 드래그 피드백 (선택 상태 유지)
+            self.tree.selection_set(self.drag_item)
+
+    def on_tree_drop(self, event):
+        """드롭"""
+        if not self.drag_item:
+            return
+
+        drop_target = self.tree.identify('item', event.x, event.y)
+
+        if drop_target and drop_target != self.drag_item:
+            # 드롭 대상이 assembly인지 확인
+            if drop_target in self.components:
+                target_node = self.components[drop_target]
+
+                if target_node.type == 'assembly' or drop_target == 'root':
+                    # 이동 가능한지 확인 (자기 자신의 자손에게는 이동 불가)
+                    if not self._is_descendant(drop_target, self.drag_item):
+                        # 이동 명령 실행
+                        source_node = self.components[self.drag_item]
+                        old_parent = source_node.parent.name if source_node.parent else 'root'
+
+                        if old_parent != drop_target:
+                            cmd = MoveComponentCommand(self, self.drag_item, old_parent, drop_target)
+                            if self.history.execute(cmd):
+                                messagebox.showinfo("성공", f"'{self.drag_item}'를 '{drop_target}'로 이동")
+                                self.refresh_3d_view()
+                    else:
+                        messagebox.showerror("오류", "자기 자신의 자손으로는 이동할 수 없습니다.")
+                else:
+                    messagebox.showerror("오류", "Assembly에만 드롭할 수 있습니다.")
+
+        self.drag_item = None
+
+    def _is_descendant(self, ancestor: str, descendant: str) -> bool:
+        """ancestor가 descendant의 조상인지 확인"""
+        if ancestor not in self.components or descendant not in self.components:
+            return False
+
+        node = self.components[descendant]
+        while node.parent:
+            if node.parent.name == ancestor:
+                return True
+            node = node.parent
+
+        return False
+
+    # ============================================================
+    # Command Implementations
+    # ============================================================
+
+    def _add_component_impl(self, node_data: Dict[str, Any]) -> bool:
+        """컴포넌트 추가 구현"""
+        name = node_data['name']
+        parent_name = node_data['parent']
+
+        if name in self.components:
+            return False
+
+        if parent_name not in self.components:
+            return False
+
+        node = ComponentNode(name, node_data['type'], self.components[parent_name])
+        node.set_from_dict(node_data)
+
+        self.components[name] = node
+        self.components[parent_name].add_child(node)
+
+        # 트리뷰 업데이트
+        dimensions = self.get_dimension_str(node)
+        self.tree.insert(parent_name, 'end', name, text=name, values=(node.type, dimensions))
+
+        self.update_parent_combo()
+        return True
+
+    def _delete_component_impl(self, name: str) -> bool:
+        """컴포넌트 삭제 구현"""
+        if name == 'root' or name not in self.components:
+            return False
+
+        # 재귀적으로 삭제
+        self._delete_recursive(name)
+
+        # 트리뷰 업데이트
+        if self.tree.exists(name):
+            self.tree.delete(name)
+
+        self.update_parent_combo()
+        return True
+
+    def _delete_recursive(self, name: str):
+        """재귀적으로 노드 삭제"""
+        if name not in self.components:
+            return
+
+        node = self.components[name]
+        for child in list(node.children):
+            self._delete_recursive(child.name)
+
+        if node.parent:
+            node.parent.remove_child(node)
+
+        del self.components[name]
+
+    def _update_component_impl(self, name: str, new_data: Dict[str, Any]) -> bool:
+        """컴포넌트 수정 구현"""
+        if name not in self.components:
+            return False
+
+        node = self.components[name]
+        node.set_from_dict(new_data)
+
+        # 트리뷰 업데이트
+        dimensions = self.get_dimension_str(node)
+        self.tree.item(name, values=(node.type, dimensions))
+
+        return True
+
+    def _move_component_impl(self, name: str, new_parent_name: str) -> bool:
+        """컴포넌트 이동 구현"""
+        if name not in self.components or new_parent_name not in self.components:
+            return False
+
+        node = self.components[name]
+        new_parent = self.components[new_parent_name]
+        old_parent = node.parent
+
+        if new_parent.type != 'assembly' and new_parent_name != 'root':
+            return False
+
+        # 이동
+        if old_parent:
+            old_parent.remove_child(node)
+
+        new_parent.add_child(node)
+
+        # 트리뷰 업데이트
+        self.tree.move(name, new_parent_name, 'end')
+
+        return True
+
+    def _backup_subtree(self, name: str) -> List[Dict[str, Any]]:
+        """서브트리 백업 (Undo용)"""
+        if name not in self.components:
+            return []
+
+        backup = []
+        node = self.components[name]
+
+        # 현재 노드 백업
+        backup.append(node.get_data_dict())
+
+        # 자식들 재귀적으로 백업
+        for child in node.children:
+            backup.extend(self._backup_subtree(child.name))
+
+        return backup
+
+    def _restore_subtree(self, backup_data: List[Dict[str, Any]]) -> bool:
+        """서브트리 복원 (Undo용)"""
+        if not backup_data:
+            return False
+
+        # 순서대로 복원
+        for data in backup_data:
+            if data['name'] not in self.components:
+                self._add_component_impl(data)
+
+        return True
+
+    # ============================================================
+    # Undo/Redo
+    # ============================================================
+
+    def undo(self):
+        """Undo"""
+        if self.history.undo():
+            messagebox.showinfo("Undo", "마지막 작업 취소됨")
+            self.refresh_3d_view()
+        else:
+            messagebox.showwarning("Undo", "취소할 작업이 없습니다.")
+
+    def redo(self):
+        """Redo"""
+        if self.history.redo():
+            messagebox.showinfo("Redo", "작업 재실행됨")
+            self.refresh_3d_view()
+        else:
+            messagebox.showwarning("Redo", "재실행할 작업이 없습니다.")
+
+    # ============================================================
+    # UI Callbacks
+    # ============================================================
+
     def on_type_change(self):
-        """타입 변경 시 적절한 파라미터 프레임 표시"""
+        """타입 변경 시"""
         node_type = self.type_var.get()
 
-        # 모든 프레임 숨김
         self.box_frame.grid_remove()
         self.cyl_frame.grid_remove()
         self.sphere_frame.grid_remove()
         self.position_frame.grid_remove()
 
-        # 타입에 따라 적절한 프레임 표시
         if node_type == 'box':
             self.box_frame.grid()
             self.position_frame.grid()
@@ -302,7 +933,6 @@ class ModelCheckerGUI:
         elif node_type == 'sphere':
             self.sphere_frame.grid()
             self.position_frame.grid()
-        # assembly는 위치 파라미터 불필요
 
     def browse_coord_file(self):
         """좌표 파일 찾기"""
@@ -314,7 +944,7 @@ class ModelCheckerGUI:
             self.coord_file_var.set(filename)
 
     def update_parent_combo(self):
-        """부모 콤보박스 업데이트 (assembly만 표시)"""
+        """부모 콤보박스 업데이트"""
         assemblies = ['root']
         for name, node in self.components.items():
             if node.type == 'assembly' and name != 'root':
@@ -333,47 +963,36 @@ class ModelCheckerGUI:
             return
 
         parent_name = self.parent_var.get()
-        if parent_name not in self.components:
-            messagebox.showerror("오류", f"부모 '{parent_name}'을(를) 찾을 수 없습니다.")
-            return
 
-        # 노드 생성
-        node = ComponentNode(name, self.type_var.get(), self.components[parent_name])
+        # 노드 데이터 준비
+        node_data = {
+            'name': name,
+            'type': self.type_var.get(),
+            'parent': parent_name,
+            'L': self.L_var.get(),
+            'W': self.W_var.get(),
+            'T': self.T_var.get(),
+            'D': self.D_cyl_var.get() if self.type_var.get() == 'cyl' else self.D_sphere_var.get(),
+            'H': self.H_var.get(),
+            'cx': self.cx_var.get(),
+            'cy': self.cy_var.get(),
+            'cz': self.cz_var.get(),
+            'color': self.color_var.get(),
+            'coord_file': self.coord_file_var.get(),
+            'coord_has_header': self.coord_header_var.get()
+        }
 
-        # 파라미터 설정
-        node.L = self.L_var.get()
-        node.W = self.W_var.get()
-        node.T = self.T_var.get()
-
-        if node.type == 'cyl':
-            node.D = self.D_cyl_var.get()
-            node.H = self.H_var.get()
-        elif node.type == 'sphere':
-            node.D = self.D_sphere_var.get()
-
-        node.cx = self.cx_var.get()
-        node.cy = self.cy_var.get()
-        node.cz = self.cz_var.get()
-        node.color = self.color_var.get()
-        node.coord_file = self.coord_file_var.get()
-        node.coord_has_header = self.coord_header_var.get()
-
-        # 트리에 추가
-        self.components[name] = node
-        self.components[parent_name].add_child(node)
-
-        # 트리뷰 업데이트
-        dimensions = self.get_dimension_str(node)
-        self.tree.insert(parent_name, 'end', name, text=name, values=(node.type, dimensions))
-
-        # 부모 콤보박스 업데이트
-        self.update_parent_combo()
-
-        messagebox.showinfo("성공", f"'{name}' 추가됨")
-        self.clear_form()
+        # 명령 실행
+        cmd = AddComponentCommand(self, node_data)
+        if self.history.execute(cmd):
+            messagebox.showinfo("성공", f"'{name}' 추가됨")
+            self.clear_form()
+            self.refresh_3d_view()
+        else:
+            messagebox.showerror("오류", "추가 실패")
 
     def update_component(self):
-        """선택된 컴포넌트 수정"""
+        """컴포넌트 수정"""
         selection = self.tree.selection()
         if not selection:
             messagebox.showerror("오류", "수정할 컴포넌트를 선택하세요.")
@@ -385,34 +1004,36 @@ class ModelCheckerGUI:
             return
 
         node = self.components[item_id]
+        old_data = node.get_data_dict()
 
-        # 파라미터 업데이트
-        node.type = self.type_var.get()
-        node.L = self.L_var.get()
-        node.W = self.W_var.get()
-        node.T = self.T_var.get()
+        # 새 데이터
+        new_data = {
+            'name': item_id,
+            'type': self.type_var.get(),
+            'parent': node.parent.name if node.parent else 'root',
+            'L': self.L_var.get(),
+            'W': self.W_var.get(),
+            'T': self.T_var.get(),
+            'D': self.D_cyl_var.get() if self.type_var.get() == 'cyl' else self.D_sphere_var.get(),
+            'H': self.H_var.get(),
+            'cx': self.cx_var.get(),
+            'cy': self.cy_var.get(),
+            'cz': self.cz_var.get(),
+            'color': self.color_var.get(),
+            'coord_file': self.coord_file_var.get(),
+            'coord_has_header': self.coord_header_var.get()
+        }
 
-        if node.type == 'cyl':
-            node.D = self.D_cyl_var.get()
-            node.H = self.H_var.get()
-        elif node.type == 'sphere':
-            node.D = self.D_sphere_var.get()
-
-        node.cx = self.cx_var.get()
-        node.cy = self.cy_var.get()
-        node.cz = self.cz_var.get()
-        node.color = self.color_var.get()
-        node.coord_file = self.coord_file_var.get()
-        node.coord_has_header = self.coord_header_var.get()
-
-        # 트리뷰 업데이트
-        dimensions = self.get_dimension_str(node)
-        self.tree.item(item_id, values=(node.type, dimensions))
-
-        messagebox.showinfo("성공", f"'{item_id}' 수정됨")
+        # 명령 실행
+        cmd = UpdateComponentCommand(self, item_id, old_data, new_data)
+        if self.history.execute(cmd):
+            messagebox.showinfo("성공", f"'{item_id}' 수정됨")
+            self.refresh_3d_view()
+        else:
+            messagebox.showerror("오류", "수정 실패")
 
     def delete_component(self):
-        """선택된 컴포넌트 삭제"""
+        """컴포넌트 삭제"""
         selection = self.tree.selection()
         if not selection:
             messagebox.showerror("오류", "삭제할 컴포넌트를 선택하세요.")
@@ -424,29 +1045,16 @@ class ModelCheckerGUI:
             return
 
         if messagebox.askyesno("확인", f"'{item_id}'를 삭제하시겠습니까?"):
-            # 자식도 함께 삭제
-            self.delete_recursive(item_id)
-            self.tree.delete(item_id)
-            self.update_parent_combo()
-            messagebox.showinfo("성공", f"'{item_id}' 삭제됨")
-            self.clear_form()
-
-    def delete_recursive(self, name):
-        """재귀적으로 노드와 자식들 삭제"""
-        if name not in self.components:
-            return
-
-        node = self.components[name]
-        for child in list(node.children):
-            self.delete_recursive(child.name)
-
-        if node.parent:
-            node.parent.children.remove(node)
-
-        del self.components[name]
+            cmd = DeleteComponentCommand(self, item_id)
+            if self.history.execute(cmd):
+                messagebox.showinfo("성공", f"'{item_id}' 삭제됨")
+                self.clear_form()
+                self.refresh_3d_view()
+            else:
+                messagebox.showerror("오류", "삭제 실패")
 
     def on_tree_select(self, event):
-        """트리 선택 시 폼에 값 로드"""
+        """트리 선택 시"""
         selection = self.tree.selection()
         if not selection:
             return
@@ -457,7 +1065,6 @@ class ModelCheckerGUI:
 
         node = self.components[item_id]
 
-        # 폼에 값 로드
         self.name_var.set(node.name)
         self.type_var.set(node.type)
         self.parent_var.set(node.parent.name if node.parent else 'root')
@@ -503,23 +1110,35 @@ class ModelCheckerGUI:
         self.on_type_change()
 
     def get_dimension_str(self, node):
-        """노드의 치수 문자열 반환"""
+        """치수 문자열"""
         if node.type == 'assembly':
             return ''
         elif node.type == 'box':
-            return f"L={node.L}, W={node.W}, T={node.T}"
+            return f"{node.L}×{node.W}×{node.T}"
         elif node.type == 'cyl':
-            return f"D={node.D}, H={node.H}"
+            return f"D{node.D}×H{node.H}"
         elif node.type == 'sphere':
-            return f"D={node.D}"
+            return f"D{node.D}"
         return ''
 
-    def show_context_menu(self, event):
-        """우클릭 메뉴 (추후 확장 가능)"""
-        pass
+    # ============================================================
+    # 3D Viewer
+    # ============================================================
+
+    def refresh_3d_view(self):
+        """3D 뷰 새로고침"""
+        try:
+            self.viewer_3d.render_components(self.components)
+        except Exception as e:
+            print(f"3D 렌더링 오류: {e}")
+            messagebox.showerror("3D 렌더링 오류", str(e))
+
+    # ============================================================
+    # CSV
+    # ============================================================
 
     def save_csv(self):
-        """CSV 파일로 저장"""
+        """CSV 저장"""
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
@@ -536,7 +1155,6 @@ class ModelCheckerGUI:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
 
-                # root는 제외하고 저장
                 for name, node in self.components.items():
                     if name == 'root':
                         continue
@@ -547,7 +1165,7 @@ class ModelCheckerGUI:
             messagebox.showerror("오류", f"CSV 저장 실패:\n{str(e)}")
 
     def load_csv(self):
-        """CSV 파일 불러오기"""
+        """CSV 불러오기"""
         filename = filedialog.askopenfilename(
             filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")]
         )
@@ -556,14 +1174,13 @@ class ModelCheckerGUI:
             return
 
         try:
-            # 기존 데이터 초기화 (root 제외)
+            # 초기화
             for name in list(self.components.keys()):
                 if name != 'root':
                     del self.components[name]
 
             self.root_node.children = []
 
-            # 트리뷰 초기화
             for item in self.tree.get_children('root'):
                 self.tree.delete(item)
 
@@ -572,7 +1189,7 @@ class ModelCheckerGUI:
                 reader = csv.DictReader(f)
                 rows = list(reader)
 
-            # 먼저 assembly 생성
+            # Assembly 먼저
             for row in rows:
                 if row['type'].strip().lower() == 'assembly':
                     name = row['name'].strip()
@@ -587,7 +1204,7 @@ class ModelCheckerGUI:
 
                     self.tree.insert(parent_name, 'end', name, text=name, values=('assembly', ''))
 
-            # 나머지 컴포넌트 생성
+            # 나머지
             for row in rows:
                 node_type = row['type'].strip().lower()
                 if node_type == 'assembly':
@@ -601,7 +1218,6 @@ class ModelCheckerGUI:
 
                 node = ComponentNode(name, node_type, self.components[parent_name])
 
-                # 파라미터 설정
                 node.L = float(row.get('L', 0) or 0)
                 node.W = float(row.get('W', 0) or 0)
                 node.T = float(row.get('T', 0) or 0)
@@ -622,14 +1238,15 @@ class ModelCheckerGUI:
                 self.tree.insert(parent_name, 'end', name, text=name, values=(node_type, dimensions))
 
             self.update_parent_combo()
+            self.history.clear()  # 히스토리 초기화
             messagebox.showinfo("성공", f"CSV 파일 불러옴:\n{filename}")
+            self.refresh_3d_view()
 
         except Exception as e:
             messagebox.showerror("오류", f"CSV 불러오기 실패:\n{str(e)}")
 
     def run_3d_viewer(self):
-        """3D 뷰어 실행"""
-        # 먼저 CSV 저장
+        """3D 뷰어 실행 (Jupyter)"""
         csv_file = "components.csv"
         try:
             with open(csv_file, 'w', encoding='utf-8', newline='') as f:
@@ -643,11 +1260,10 @@ class ModelCheckerGUI:
                         continue
                     writer.writerow(node.to_dict())
 
-            # 3D 뷰어 실행 (별도 프로세스로)
             import subprocess
             subprocess.Popen(['python3', 'model_checker_3d.py'])
 
-            messagebox.showinfo("정보", "3D 뷰어를 실행합니다.\n(jupyter 환경에서 실행하세요)")
+            messagebox.showinfo("정보", "3D 뷰어를 실행합니다.\n(Jupyter 환경에서 실행하세요)")
 
         except Exception as e:
             messagebox.showerror("오류", f"3D 뷰어 실행 실패:\n{str(e)}")
