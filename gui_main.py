@@ -1794,13 +1794,38 @@ class ModelCheckerGUI:
                         continue
                     writer.writerow(node.to_dict())
 
-            # 2. Jupyter Notebook 파일 생성
+            # 2. 디버깅: 컴포넌트 구조 출력
+            debug_file = os.path.join(self.script_dir, "debug_components.txt")
+            with open(debug_file, 'w', encoding='utf-8') as f:
+                f.write("=== Component Structure Debug ===\n\n")
+                for name, node in self.components.items():
+                    parent_name = node.parent.name if node.parent else 'None'
+                    f.write(f"Name: {name}\n")
+                    f.write(f"  Type: {node.type}\n")
+                    f.write(f"  Parent: {parent_name}\n")
+                    f.write(f"  Children: {[c.name for c in node.children]}\n")
+                    if node.type == 'sphere':
+                        f.write(f"  D={node.D}, cx={node.cx}, cy={node.cy}, cz={node.cz}\n")
+                    elif node.type == 'box':
+                        f.write(f"  L={node.L}, W={node.W}, T={node.T}, cx={node.cx}, cy={node.cy}, cz={node.cz}\n")
+                    f.write("\n")
+
+            # 3. Jupyter Notebook 파일 생성
             notebook_file = self._create_jupyter_notebook()
 
-            # 3. 사용자에게 옵션 제공
+            # 4. 생성된 코드 저장 (디버깅용)
+            code_debug_file = os.path.join(self.script_dir, "debug_generated_code.py")
+            code_lines = self._generate_viewer_code()
+            with open(code_debug_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(code_lines))
+
+            # 5. 사용자에게 옵션 제공
             result = messagebox.askyesnocancel(
                 "Jupyter 뷰어",
                 f"Jupyter Notebook이 생성되었습니다:\n{notebook_file}\n\n"
+                f"디버깅 파일도 생성되었습니다:\n"
+                f"- {debug_file}\n"
+                f"- {code_debug_file}\n\n"
                 f"jupyter_cadquery의 모든 기능을 사용할 수 있습니다:\n"
                 f"- Tree view에서 hide/show\n"
                 f"- XY, YZ, ZX 평면 뷰\n"
