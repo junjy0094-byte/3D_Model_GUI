@@ -1514,46 +1514,79 @@ class ModelCheckerGUI:
 
             # HTML로 내보내기
             html_file = os.path.join(os.getcwd(), "cadquery_viewer.html")
+            export_success = False
 
-            # jupyter_cadquery의 HTML export 기능 사용
+            # jupyter_cadquery의 HTML export 기능 사용 (버전별 호환성 처리)
             # 방법 1: export_html (3.x 버전)
-            if hasattr(jcq, 'export_html'):
-                jcq.export_html(
-                    root,
-                    html_file,
-                    axes=False,
-                    axes0=False,
-                    grid=False,
-                    ortho=True,
-                    theme='light',
-                    default_edgecolor='black',
-                    tree_width=250,
-                    cad_width=1300,
-                    height=700
-                )
-            # 방법 2: show_object().export_html() 또는 to_html()
-            elif hasattr(jcq, 'show_object'):
-                viewer = jcq.show_object(
-                    root,
-                    axes=False,
-                    axes0=False,
-                    grid=False,
-                    ortho=True,
-                    theme='light'
-                )
-                if hasattr(viewer, 'export_html'):
-                    viewer.export_html(html_file)
-                elif hasattr(viewer, 'to_html'):
-                    with open(html_file, 'w') as f:
-                        f.write(viewer.to_html())
+            if hasattr(jcq, 'export_html') and not export_success:
+                try:
+                    jcq.export_html(
+                        root,
+                        html_file,
+                        axes=False,
+                        axes0=False,
+                        grid=False,
+                        ortho=True,
+                        theme='light',
+                        default_edgecolor='black',
+                        tree_width=250,
+                        cad_width=1300,
+                        height=700
+                    )
+                    export_success = True
+                except TypeError:
+                    # Try without theme parameter
+                    try:
+                        jcq.export_html(root, html_file)
+                        export_success = True
+                    except:
+                        pass
+
+            # 방법 2: show() with export
+            if hasattr(jcq, 'show') and not export_success:
+                try:
+                    # Try with all parameters first
+                    viewer = jcq.show(
+                        root,
+                        axes=False,
+                        axes0=False,
+                        grid=False,
+                        ortho=True,
+                        theme='light'
+                    )
+                    if hasattr(viewer, 'export_html'):
+                        viewer.export_html(html_file)
+                        export_success = True
+                except TypeError:
+                    # Try without theme parameter
+                    try:
+                        viewer = jcq.show(root, axes=False, grid=False, ortho=True)
+                        if hasattr(viewer, 'export_html'):
+                            viewer.export_html(html_file)
+                            export_success = True
+                    except TypeError:
+                        # Try with minimal parameters
+                        try:
+                            viewer = jcq.show(root)
+                            if hasattr(viewer, 'export_html'):
+                                viewer.export_html(html_file)
+                                export_success = True
+                        except:
+                            pass
+
             # 방법 3: PartGroup을 통한 export
-            elif hasattr(jcq, 'PartGroup'):
-                from jupyter_cadquery.viewer.client import show
-                pg = jcq.PartGroup([root])
-                if hasattr(pg, 'to_html'):
-                    with open(html_file, 'w') as f:
-                        f.write(pg.to_html())
-            else:
+            if hasattr(jcq, 'PartGroup') and not export_success:
+                try:
+                    pg = jcq.PartGroup([root])
+                    if hasattr(pg, 'to_html'):
+                        with open(html_file, 'w') as f:
+                            f.write(pg.to_html())
+                        export_success = True
+                except:
+                    pass
+
+            # 방법 4: STEP 파일로 내보내기 (fallback)
+            if not export_success:
                 # 대체 방법: STEP 파일로 내보내고 three-cad-viewer로 표시
                 step_file = os.path.join(os.getcwd(), "model.step")
                 root.save(step_file)
