@@ -1393,7 +1393,10 @@ class ModelCheckerGUI:
                         name=name,
                         color=node.color if node.color else 'lightblue',
                         opacity=0.8,
-                        flatshading=True
+                        flatshading=True,
+                        showlegend=True,  # 레전드에 표시
+                        legendgroup=name,  # 같은 그룹으로 묶기
+                        hoverinfo='name'  # 호버 시 이름 표시
                     ))
 
             # 레이아웃 설정 (hide/show + 평면 뷰 버튼 포함)
