@@ -44,6 +44,15 @@ except ImportError:
     TEMPLATES_AVAILABLE = False
     print("Warning: Templates module not available.")
 
+# jupyter_cadquery for native HTML export
+try:
+    import jupyter_cadquery as jcq
+    from cadquery import Assembly, Location, Vector
+    JUPYTER_CADQUERY_AVAILABLE = True
+except ImportError:
+    JUPYTER_CADQUERY_AVAILABLE = False
+    print("Warning: jupyter_cadquery not available. Native CadQuery viewer will not work.")
+
 
 # ============================================================
 # Command Pattern for Undo/Redo
@@ -754,7 +763,8 @@ class ModelCheckerGUI:
         ttk.Button(button_frame, text="📋 템플릿", command=self.open_template_selector).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="💾 CSV 저장 (Ctrl+S)", command=self.save_csv).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="📂 CSV 불러오기 (Ctrl+O)", command=self.load_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="🌐 HTML 3D 뷰어", command=self.open_html_3d_viewer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="🌐 Plotly HTML", command=self.open_html_3d_viewer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="🔧 CadQuery HTML", command=self.open_cadquery_html_viewer).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="🚀 Jupyter 뷰어", command=self.run_3d_viewer).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="종료", command=self.root.quit).pack(side=tk.RIGHT, padx=2)
 
@@ -1411,6 +1421,180 @@ class ModelCheckerGUI:
 
         except Exception as e:
             messagebox.showerror("오류", f"HTML 3D 뷰어 생성 실패:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def open_cadquery_html_viewer(self):
+        """CadQuery 네이티브 HTML 뷰어 (jupyter_cadquery 사용)
+
+        기능:
+        - Tree view로 hide/show 가능
+        - XY, YZ, ZX 평면 뷰
+        - 어셈블리 계층 구조 표시
+        - 색상 및 투명도 지원
+        """
+        if not CADQUERY_AVAILABLE:
+            messagebox.showerror("오류", "CadQuery가 설치되지 않았습니다.")
+            return
+
+        if not JUPYTER_CADQUERY_AVAILABLE:
+            messagebox.showerror("오류",
+                "jupyter_cadquery가 설치되지 않았습니다.\n"
+                "pip install jupyter_cadquery\n\n"
+                "jupyter_cadquery를 사용하면 hide/show, XY/YZ/ZX 뷰 등\n"
+                "model_checker_3d.py의 모든 기능을 HTML로 사용할 수 있습니다.")
+            return
+
+        try:
+            # CadQuery Assembly 구조 생성
+            assemblies = {}
+            assemblies['root'] = Assembly(name="ROOT")
+
+            # 1단계: 모든 어셈블리 생성
+            for name, node in self.components.items():
+                if node.type == 'assembly':
+                    assemblies[name] = Assembly(name=name)
+
+            # 2단계: 형상 추가
+            for name, node in self.components.items():
+                if node.type in ['box', 'cyl', 'sphere']:
+                    parent_name = node.parent if node.parent else 'root'
+                    if parent_name not in assemblies:
+                        parent_name = 'root'
+
+                    parent_assy = assemblies[parent_name]
+
+                    # 형상 생성
+                    if node.type == 'box':
+                        if node.L <= 0 or node.W <= 0 or node.T <= 0:
+                            continue
+                        shape = cq.Workplane("XY").box(node.L, node.W, node.T).val()
+                        center_z = node.cz + node.T / 2
+                    elif node.type == 'cyl':
+                        if node.D <= 0 or node.H <= 0:
+                            continue
+                        shape = cq.Workplane("XY").circle(node.D/2).extrude(node.H).val()
+                        shape = shape.translate((0, 0, -node.H/2))
+                        center_z = node.cz + node.H / 2
+                    elif node.type == 'sphere':
+                        if node.D <= 0:
+                            continue
+                        shape = cq.Workplane("XY").sphere(node.D/2).val()
+                        center_z = node.cz + node.D / 2
+                    else:
+                        continue
+
+                    # 위치 설정 및 어셈블리에 추가
+                    loc = Location(Vector(node.cx, node.cy, center_z))
+                    color = node.color if node.color else 'lightblue'
+                    parent_assy.add(shape, name=name, loc=loc, color=color)
+
+            # 3단계: 어셈블리 계층 구성
+            for name, node in self.components.items():
+                if node.type == 'assembly':
+                    parent_name = node.parent if node.parent else 'root'
+                    if parent_name not in assemblies:
+                        parent_name = 'root'
+
+                    parent_assy = assemblies[parent_name]
+                    child_assy = assemblies[name]
+                    parent_assy.add(child_assy, name=name)
+
+            root = assemblies['root']
+
+            # HTML로 내보내기
+            html_file = os.path.join(os.getcwd(), "cadquery_viewer.html")
+
+            # jupyter_cadquery의 HTML export 기능 사용
+            # 방법 1: export_html (3.x 버전)
+            if hasattr(jcq, 'export_html'):
+                jcq.export_html(
+                    root,
+                    html_file,
+                    axes=False,
+                    axes0=False,
+                    grid=False,
+                    ortho=True,
+                    theme='light',
+                    default_edgecolor='black',
+                    tree_width=250,
+                    cad_width=1300,
+                    height=700
+                )
+            # 방법 2: show_object().export_html() 또는 to_html()
+            elif hasattr(jcq, 'show_object'):
+                viewer = jcq.show_object(
+                    root,
+                    axes=False,
+                    axes0=False,
+                    grid=False,
+                    ortho=True,
+                    theme='light'
+                )
+                if hasattr(viewer, 'export_html'):
+                    viewer.export_html(html_file)
+                elif hasattr(viewer, 'to_html'):
+                    with open(html_file, 'w') as f:
+                        f.write(viewer.to_html())
+            # 방법 3: PartGroup을 통한 export
+            elif hasattr(jcq, 'PartGroup'):
+                from jupyter_cadquery.viewer.client import show
+                pg = jcq.PartGroup([root])
+                if hasattr(pg, 'to_html'):
+                    with open(html_file, 'w') as f:
+                        f.write(pg.to_html())
+            else:
+                # 대체 방법: STEP 파일로 내보내고 three-cad-viewer로 표시
+                step_file = os.path.join(os.getcwd(), "model.step")
+                root.save(step_file)
+
+                # 간단한 HTML 뷰어 생성 (STEP 파일 다운로드 링크 포함)
+                html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>CadQuery Model Viewer</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; padding: 20px; }}
+        .info {{ background: #f0f0f0; padding: 15px; border-radius: 5px; }}
+    </style>
+</head>
+<body>
+    <h1>CadQuery Model Export</h1>
+    <div class="info">
+        <p><strong>STEP 파일이 생성되었습니다:</strong> {step_file}</p>
+        <p>이 파일을 다음 프로그램에서 열 수 있습니다:</p>
+        <ul>
+            <li><a href="https://github.com/nickg/cq-editor">CQ-Editor</a> (권장)</li>
+            <li>FreeCAD</li>
+            <li>온라인: <a href="https://www.3dvieweronline.com/">3D Viewer Online</a></li>
+        </ul>
+        <p><strong>jupyter_cadquery를 설치하면 완전한 HTML 뷰어를 사용할 수 있습니다:</strong></p>
+        <pre>pip install jupyter_cadquery</pre>
+    </div>
+</body>
+</html>'''
+                with open(html_file, 'w') as f:
+                    f.write(html_content)
+
+                messagebox.showinfo("안내",
+                    f"jupyter_cadquery의 HTML export 기능을 찾을 수 없습니다.\n"
+                    f"STEP 파일로 내보냈습니다: {step_file}\n\n"
+                    f"CQ-Editor 또는 FreeCAD에서 열 수 있습니다.")
+
+            # 브라우저에서 열기
+            import webbrowser
+            webbrowser.open(f'file://{html_file}')
+
+            messagebox.showinfo("성공",
+                f"CadQuery HTML 뷰어가 브라우저에서 열렸습니다.\n"
+                f"파일: {html_file}\n\n"
+                f"기능:\n"
+                f"- Tree view에서 hide/show\n"
+                f"- XY, YZ, ZX 평면 뷰\n"
+                f"- 마우스로 회전/확대/이동")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"CadQuery HTML 뷰어 생성 실패:\n{str(e)}")
             import traceback
             traceback.print_exc()
 

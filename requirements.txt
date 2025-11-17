@@ -2,7 +2,7 @@
 
 # Core 3D modeling
 cadquery>=2.0
-jupyter-cadquery
+jupyter-cadquery  # For native HTML export with hide/show, XY/YZ/ZX views
 
 # Data handling
 pandas
