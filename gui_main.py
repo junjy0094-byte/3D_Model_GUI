@@ -1396,22 +1396,95 @@ class ModelCheckerGUI:
                         flatshading=True
                     ))
 
-            # 레이아웃 설정
+            # 레이아웃 설정 (hide/show + 평면 뷰 버튼 포함)
             fig.update_layout(
-                title='3D Model Viewer',
+                title='3D Model Viewer - Click legend to hide/show components',
                 scene=dict(
                     xaxis_title='X',
                     yaxis_title='Y',
                     zaxis_title='Z',
-                    aspectmode='data'
+                    aspectmode='data',
+                    camera=dict(
+                        projection=dict(type='orthographic')
+                    )
                 ),
-                width=1200,
-                height=800
+                width=1400,
+                height=900,
+                showlegend=True,
+                legend=dict(
+                    title=dict(text='Components (Click to hide/show)'),
+                    yanchor="top",
+                    y=0.99,
+                    xanchor="left",
+                    x=0.01,
+                    bgcolor="rgba(255,255,255,0.8)"
+                ),
+                # XY, YZ, ZX 평면 뷰 버튼 추가
+                updatemenus=[
+                    dict(
+                        type="buttons",
+                        direction="left",
+                        buttons=[
+                            dict(
+                                args=[{"scene.camera": dict(
+                                    eye=dict(x=0, y=0, z=2),
+                                    up=dict(x=0, y=1, z=0),
+                                    projection=dict(type='orthographic')
+                                )}],
+                                label="XY View (Top)",
+                                method="relayout"
+                            ),
+                            dict(
+                                args=[{"scene.camera": dict(
+                                    eye=dict(x=0, y=-2, z=0),
+                                    up=dict(x=0, y=0, z=1),
+                                    projection=dict(type='orthographic')
+                                )}],
+                                label="XZ View (Front)",
+                                method="relayout"
+                            ),
+                            dict(
+                                args=[{"scene.camera": dict(
+                                    eye=dict(x=2, y=0, z=0),
+                                    up=dict(x=0, y=0, z=1),
+                                    projection=dict(type='orthographic')
+                                )}],
+                                label="YZ View (Side)",
+                                method="relayout"
+                            ),
+                            dict(
+                                args=[{"scene.camera": dict(
+                                    eye=dict(x=1.5, y=1.5, z=1.5),
+                                    up=dict(x=0, y=0, z=1),
+                                    projection=dict(type='orthographic')
+                                )}],
+                                label="Isometric",
+                                method="relayout"
+                            ),
+                            dict(
+                                args=[{"scene.camera.projection.type": "perspective"}],
+                                label="Perspective",
+                                method="relayout"
+                            ),
+                            dict(
+                                args=[{"scene.camera.projection.type": "orthographic"}],
+                                label="Orthographic",
+                                method="relayout"
+                            ),
+                        ],
+                        pad={"r": 10, "t": 10},
+                        showactive=True,
+                        x=0.5,
+                        xanchor="center",
+                        y=1.15,
+                        yanchor="top"
+                    ),
+                ]
             )
 
             # HTML 파일로 저장
             html_file = os.path.join(os.getcwd(), "3d_viewer.html")
-            fig.write_html(html_file)
+            fig.write_html(html_file, include_plotlyjs=True, full_html=True)
 
             # 브라우저에서 열기
             import webbrowser
