@@ -29,6 +29,21 @@ except ImportError:
     CADQUERY_AVAILABLE = False
     print("Warning: CadQuery not available. 3D preview will be limited.")
 
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    print("Warning: Plotly not available. HTML 3D viewer will not work.")
+
+# Template system
+try:
+    from templates import TemplateManager
+    TEMPLATES_AVAILABLE = True
+except ImportError:
+    TEMPLATES_AVAILABLE = False
+    print("Warning: Templates module not available.")
+
 
 # ============================================================
 # Command Pattern for Undo/Redo
@@ -736,9 +751,11 @@ class ModelCheckerGUI:
         button_frame = ttk.Frame(self.root)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
 
+        ttk.Button(button_frame, text="📋 템플릿", command=self.open_template_selector).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="💾 CSV 저장 (Ctrl+S)", command=self.save_csv).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="📂 CSV 불러오기 (Ctrl+O)", command=self.load_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="🚀 3D 뷰어 실행 (Jupyter)", command=self.run_3d_viewer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="🌐 HTML 3D 뷰어", command=self.open_html_3d_viewer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="🚀 Jupyter 뷰어", command=self.run_3d_viewer).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="종료", command=self.root.quit).pack(side=tk.RIGHT, padx=2)
 
     # ============================================================
@@ -1282,6 +1299,178 @@ class ModelCheckerGUI:
 
         except Exception as e:
             messagebox.showerror("오류", f"CSV 불러오기 실패:\n{str(e)}")
+
+    def open_template_selector(self):
+        """템플릿 선택기 열기"""
+        if not TEMPLATES_AVAILABLE:
+            messagebox.showerror("오류", "템플릿 모듈을 찾을 수 없습니다.")
+            return
+
+        manager = TemplateManager(self.root, self._on_template_generate)
+        manager.show_selector()
+
+    def _on_template_generate(self, components: List[Dict[str, Any]]):
+        """템플릿에서 생성된 컴포넌트들을 추가"""
+        # 기존 컴포넌트 초기화 확인
+        if len(self.components) > 1:  # root 외에 다른 것이 있으면
+            if not messagebox.askyesno("확인", "현재 컴포넌트를 모두 삭제하고 템플릿을 적용하시겠습니까?"):
+                return
+
+            # 기존 컴포넌트 삭제
+            for name in list(self.components.keys()):
+                if name != 'root':
+                    del self.components[name]
+            self.root_node.children = []
+
+            for item in self.tree.get_children('root'):
+                self.tree.delete(item)
+
+        # 히스토리 초기화
+        self.history.clear()
+
+        # 컴포넌트 추가 (assembly 먼저)
+        for comp in components:
+            if comp['type'] == 'assembly':
+                self._add_component_impl(comp)
+
+        # 나머지 컴포넌트 추가
+        for comp in components:
+            if comp['type'] != 'assembly':
+                self._add_component_impl(comp)
+
+        self.update_parent_combo()
+        self.refresh_3d_view()
+
+    def open_html_3d_viewer(self):
+        """HTML 3D 뷰어 열기 (Plotly 사용, Jupyter 불필요)"""
+        if not PLOTLY_AVAILABLE:
+            messagebox.showerror("오류", "Plotly가 설치되지 않았습니다.\npip install plotly")
+            return
+
+        if not CADQUERY_AVAILABLE:
+            messagebox.showerror("오류", "CadQuery가 설치되지 않았습니다.")
+            return
+
+        try:
+            # Plotly Figure 생성
+            fig = go.Figure()
+
+            # 각 컴포넌트를 3D 메시로 추가
+            for name, node in self.components.items():
+                if node.type == 'assembly' or name == 'root':
+                    continue
+
+                # 형상 생성
+                shape = self._create_shape_for_plotly(node)
+                if shape is None:
+                    continue
+
+                # Tessellate
+                vertices, triangles = self._tessellate_for_plotly(shape)
+
+                if len(vertices) > 0 and len(triangles) > 0:
+                    vertices = np.array(vertices)
+                    triangles = np.array(triangles)
+
+                    # Plotly Mesh3d 추가
+                    fig.add_trace(go.Mesh3d(
+                        x=vertices[:, 0],
+                        y=vertices[:, 1],
+                        z=vertices[:, 2],
+                        i=triangles[:, 0],
+                        j=triangles[:, 1],
+                        k=triangles[:, 2],
+                        name=name,
+                        color=node.color if node.color else 'lightblue',
+                        opacity=0.8,
+                        flatshading=True
+                    ))
+
+            # 레이아웃 설정
+            fig.update_layout(
+                title='3D Model Viewer',
+                scene=dict(
+                    xaxis_title='X',
+                    yaxis_title='Y',
+                    zaxis_title='Z',
+                    aspectmode='data'
+                ),
+                width=1200,
+                height=800
+            )
+
+            # HTML 파일로 저장
+            html_file = os.path.join(os.getcwd(), "3d_viewer.html")
+            fig.write_html(html_file)
+
+            # 브라우저에서 열기
+            import webbrowser
+            webbrowser.open(f'file://{html_file}')
+
+            messagebox.showinfo("성공", f"HTML 3D 뷰어가 브라우저에서 열렸습니다.\n파일: {html_file}")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"HTML 3D 뷰어 생성 실패:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _create_shape_for_plotly(self, node: ComponentNode):
+        """Plotly용 형상 생성"""
+        if node.type == 'box':
+            if node.L <= 0 or node.W <= 0 or node.T <= 0:
+                return None
+            shape = cq.Workplane("XY").box(node.L, node.W, node.T).val()
+            center_z = node.cz + node.T / 2
+            shape = shape.translate((node.cx, node.cy, center_z))
+            return shape
+
+        elif node.type == 'cyl':
+            if node.D <= 0 or node.H <= 0:
+                return None
+            shape = cq.Workplane("XY").circle(node.D/2).extrude(node.H).val()
+            center_z = node.cz + node.H / 2
+            shape = shape.translate((node.cx, node.cy, center_z - node.H/2))
+            return shape
+
+        elif node.type == 'sphere':
+            if node.D <= 0:
+                return None
+            shape = cq.Workplane("XY").sphere(node.D/2).val()
+            center_z = node.cz + node.D / 2
+            shape = shape.translate((node.cx, node.cy, center_z))
+            return shape
+
+        return None
+
+    def _tessellate_for_plotly(self, shape):
+        """Plotly용 tessellation (인덱스 기반)"""
+        all_vertices = []
+        all_triangles = []
+
+        try:
+            faces = shape.Faces()
+
+            for face in faces:
+                face_data = face.tessellate(0.1)
+
+                if len(face_data) == 2:
+                    verts, tris = face_data
+
+                    # Vector를 튜플로 변환
+                    verts_list = [v.toTuple() if hasattr(v, 'toTuple') else (v.x, v.y, v.z) for v in verts]
+
+                    # 인덱스 오프셋
+                    offset = len(all_vertices)
+                    all_vertices.extend(verts_list)
+
+                    # 삼각형 인덱스 추가
+                    for tri in tris:
+                        all_triangles.append([offset + tri[0], offset + tri[1], offset + tri[2]])
+
+        except Exception as e:
+            print(f"Plotly tessellation error: {e}")
+
+        return all_vertices, all_triangles
 
     def run_3d_viewer(self):
         """3D 뷰어 실행 (Jupyter)"""
