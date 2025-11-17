@@ -1976,17 +1976,37 @@ class ModelCheckerGUI:
                         ""
                     ])
 
-        # 어셈블리 계층 구성
+        # 어셈블리 계층 구성 (위상 정렬: 부모 먼저 연결)
         code_lines.append("# 어셈블리 계층 구성")
+
+        # 위상 정렬을 위한 어셈블리 목록 준비
+        assemblies_to_add = []
         for name, node in self.components.items():
             if name == 'root':
                 continue
             if node.type == 'assembly':
                 parent_name = node.parent if node.parent else 'root'
-                # parent가 assembly가 아니면 root로 fallback
                 if parent_name not in assembly_names:
                     parent_name = 'root'
-                code_lines.append(f"assemblies['{parent_name}'].add(assemblies['{name}'], name='{name}')")
+                assemblies_to_add.append((name, parent_name))
+
+        # 위상 정렬: root에 가까운 것부터 추가
+        added = set(['root'])
+        while assemblies_to_add:
+            progress = False
+            for assy_name, parent_name in list(assemblies_to_add):
+                if parent_name in added:
+                    code_lines.append(f"assemblies['{parent_name}'].add(assemblies['{assy_name}'], name='{assy_name}')")
+                    added.add(assy_name)
+                    assemblies_to_add.remove((assy_name, parent_name))
+                    progress = True
+
+            # 무한 루프 방지
+            if not progress:
+                # 남은 것들은 root에 직접 연결
+                for assy_name, parent_name in assemblies_to_add:
+                    code_lines.append(f"assemblies['root'].add(assemblies['{assy_name}'], name='{assy_name}')")
+                break
 
         # 뷰어 실행
         code_lines.extend([
