@@ -1943,7 +1943,7 @@ class ModelCheckerGUI:
             if name == 'root':
                 continue
             if node.type in ['box', 'cyl', 'sphere']:
-                parent_name = node.parent if node.parent else 'root'
+                parent_name = node.parent.name if node.parent else 'root'
                 # parent가 assembly가 아니면 root로 fallback
                 if parent_name not in assembly_names:
                     parent_name = 'root'
@@ -1985,7 +1985,7 @@ class ModelCheckerGUI:
             if name == 'root':
                 continue
             if node.type == 'assembly':
-                parent_name = node.parent if node.parent else 'root'
+                parent_name = node.parent.name if node.parent else 'root'
                 if parent_name not in assembly_names:
                     parent_name = 'root'
                 assemblies_to_add.append((name, parent_name))
