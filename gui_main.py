@@ -1448,19 +1448,25 @@ class ModelCheckerGUI:
         try:
             # CadQuery Assembly 구조 생성
             assemblies = {}
-            assemblies['root'] = Assembly(name="ROOT")
+            assemblies['__ROOT__'] = Assembly(name="ROOT")
 
             # 1단계: 모든 어셈블리 생성
             for name, node in self.components.items():
+                if name == 'root':
+                    continue  # Skip internal root
                 if node.type == 'assembly':
                     assemblies[name] = Assembly(name=name)
 
             # 2단계: 형상 추가
             for name, node in self.components.items():
+                if name == 'root':
+                    continue  # Skip internal root
                 if node.type in ['box', 'cyl', 'sphere']:
-                    parent_name = node.parent if node.parent else 'root'
+                    parent_name = node.parent if node.parent else '__ROOT__'
+                    if parent_name == 'root':
+                        parent_name = '__ROOT__'
                     if parent_name not in assemblies:
-                        parent_name = 'root'
+                        parent_name = '__ROOT__'
 
                     parent_assy = assemblies[parent_name]
 
@@ -1491,16 +1497,20 @@ class ModelCheckerGUI:
 
             # 3단계: 어셈블리 계층 구성
             for name, node in self.components.items():
+                if name == 'root':
+                    continue  # Skip internal root
                 if node.type == 'assembly':
-                    parent_name = node.parent if node.parent else 'root'
+                    parent_name = node.parent if node.parent else '__ROOT__'
+                    if parent_name == 'root':
+                        parent_name = '__ROOT__'
                     if parent_name not in assemblies:
-                        parent_name = 'root'
+                        parent_name = '__ROOT__'
 
                     parent_assy = assemblies[parent_name]
                     child_assy = assemblies[name]
                     parent_assy.add(child_assy, name=name)
 
-            root = assemblies['root']
+            root = assemblies['__ROOT__']
 
             # HTML로 내보내기
             html_file = os.path.join(os.getcwd(), "cadquery_viewer.html")
