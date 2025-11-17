@@ -1776,9 +1776,10 @@ class ModelCheckerGUI:
         return all_vertices, all_triangles
 
     def run_3d_viewer(self):
-        """3D 뷰어 실행 (Jupyter)"""
+        """3D 뷰어 실행 - Jupyter Notebook 자동 생성 및 실행"""
         csv_file = "components.csv"
         try:
+            # 1. CSV 파일 저장
             with open(csv_file, 'w', encoding='utf-8', newline='') as f:
                 fieldnames = ['name', 'type', 'parent', 'L', 'W', 'T', 'D', 'H',
                              'cx', 'cy', 'cz', 'color', 'coord_file', 'coord_has_header']
@@ -1790,13 +1791,214 @@ class ModelCheckerGUI:
                         continue
                     writer.writerow(node.to_dict())
 
-            import subprocess
-            subprocess.Popen(['python3', 'model_checker_3d.py'])
+            # 2. Jupyter Notebook 파일 생성
+            notebook_file = self._create_jupyter_notebook()
 
-            messagebox.showinfo("정보", "3D 뷰어를 실행합니다.\n(Jupyter 환경에서 실행하세요)")
+            # 3. 사용자에게 옵션 제공
+            result = messagebox.askyesnocancel(
+                "Jupyter 뷰어",
+                f"Jupyter Notebook이 생성되었습니다:\n{notebook_file}\n\n"
+                f"jupyter_cadquery의 모든 기능을 사용할 수 있습니다:\n"
+                f"- Tree view에서 hide/show\n"
+                f"- XY, YZ, ZX 평면 뷰\n"
+                f"- 어셈블리 계층 구조\n\n"
+                f"[예] Jupyter Lab 실행\n"
+                f"[아니오] Jupyter Notebook 실행\n"
+                f"[취소] 파일만 생성"
+            )
+
+            if result is True:  # Jupyter Lab
+                import subprocess
+                import webbrowser
+                # Jupyter Lab 서버 실행
+                proc = subprocess.Popen(
+                    ['jupyter', 'lab', notebook_file],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                messagebox.showinfo("안내",
+                    f"Jupyter Lab을 실행합니다.\n"
+                    f"브라우저에서 notebook이 열립니다.\n\n"
+                    f"실행 후 셀을 실행하면 3D 뷰어가 나타납니다.")
+            elif result is False:  # Jupyter Notebook
+                import subprocess
+                proc = subprocess.Popen(
+                    ['jupyter', 'notebook', notebook_file],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                messagebox.showinfo("안내",
+                    f"Jupyter Notebook을 실행합니다.\n"
+                    f"브라우저에서 notebook이 열립니다.\n\n"
+                    f"실행 후 셀을 실행하면 3D 뷰어가 나타납니다.")
+            else:  # 취소
+                messagebox.showinfo("안내",
+                    f"Notebook 파일이 생성되었습니다:\n{notebook_file}\n\n"
+                    f"터미널에서 다음 명령으로 실행하세요:\n"
+                    f"jupyter lab {notebook_file}")
 
         except Exception as e:
             messagebox.showerror("오류", f"3D 뷰어 실행 실패:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _create_jupyter_notebook(self):
+        """Jupyter Notebook 파일 자동 생성"""
+        import json
+
+        notebook_content = {
+            "cells": [
+                {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": [
+                        "# 3D Model Viewer\n",
+                        "GUI에서 자동 생성된 모델을 jupyter_cadquery로 시각화합니다.\n",
+                        "\n",
+                        "**기능:**\n",
+                        "- Tree view에서 hide/show\n",
+                        "- XY, YZ, ZX 평면 뷰\n",
+                        "- 어셈블리 계층 구조\n",
+                        "- 마우스로 회전/확대/이동"
+                    ]
+                },
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": [
+                        "# 자동 생성된 코드 - 아래 셀을 실행하세요\n",
+                        "%run model_checker_3d.py"
+                    ]
+                },
+                {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": [
+                        "## 수동 실행 (필요시)\n",
+                        "위 셀이 작동하지 않으면 아래 코드를 직접 실행하세요."
+                    ]
+                },
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": self._generate_viewer_code()
+                }
+            ],
+            "metadata": {
+                "kernelspec": {
+                    "display_name": "Python 3",
+                    "language": "python",
+                    "name": "python3"
+                },
+                "language_info": {
+                    "name": "python",
+                    "version": "3.8.0"
+                }
+            },
+            "nbformat": 4,
+            "nbformat_minor": 4
+        }
+
+        notebook_file = os.path.join(os.getcwd(), "model_viewer.ipynb")
+        with open(notebook_file, 'w', encoding='utf-8') as f:
+            json.dump(notebook_content, f, indent=2, ensure_ascii=False)
+
+        return notebook_file
+
+    def _generate_viewer_code(self):
+        """jupyter_cadquery 뷰어 코드 생성"""
+        code_lines = [
+            "import cadquery as cq",
+            "from cadquery import Assembly, Location, Vector",
+            "import jupyter_cadquery as jcq",
+            "",
+            "# 어셈블리 구조 생성",
+            "assemblies = {}",
+            "assemblies['root'] = Assembly(name='ROOT')",
+            ""
+        ]
+
+        # 어셈블리 생성
+        for name, node in self.components.items():
+            if name == 'root':
+                continue
+            if node.type == 'assembly':
+                code_lines.append(f"assemblies['{name}'] = Assembly(name='{name}')")
+
+        code_lines.append("")
+        code_lines.append("# 형상 추가")
+
+        # 형상 추가
+        for name, node in self.components.items():
+            if name == 'root':
+                continue
+            if node.type in ['box', 'cyl', 'sphere']:
+                parent_name = node.parent if node.parent and node.parent != 'root' else 'root'
+                if parent_name not in [n for n in self.components.keys()] and parent_name != 'root':
+                    parent_name = 'root'
+
+                color = node.color if node.color else 'lightblue'
+
+                if node.type == 'box':
+                    center_z = node.cz + node.T / 2
+                    code_lines.extend([
+                        f"shape = cq.Workplane('XY').box({node.L}, {node.W}, {node.T}).val()",
+                        f"loc = Location(Vector({node.cx}, {node.cy}, {center_z}))",
+                        f"assemblies['{parent_name}'].add(shape, name='{name}', loc=loc, color='{color}')",
+                        ""
+                    ])
+                elif node.type == 'cyl':
+                    center_z = node.cz + node.H / 2
+                    code_lines.extend([
+                        f"shape = cq.Workplane('XY').circle({node.D/2}).extrude({node.H}).val()",
+                        f"shape = shape.translate((0, 0, -{node.H/2}))",
+                        f"loc = Location(Vector({node.cx}, {node.cy}, {center_z}))",
+                        f"assemblies['{parent_name}'].add(shape, name='{name}', loc=loc, color='{color}')",
+                        ""
+                    ])
+                elif node.type == 'sphere':
+                    center_z = node.cz + node.D / 2
+                    code_lines.extend([
+                        f"shape = cq.Workplane('XY').sphere({node.D/2}).val()",
+                        f"loc = Location(Vector({node.cx}, {node.cy}, {center_z}))",
+                        f"assemblies['{parent_name}'].add(shape, name='{name}', loc=loc, color='{color}')",
+                        ""
+                    ])
+
+        # 어셈블리 계층 구성
+        code_lines.append("# 어셈블리 계층 구성")
+        for name, node in self.components.items():
+            if name == 'root':
+                continue
+            if node.type == 'assembly':
+                parent_name = node.parent if node.parent and node.parent != 'root' else 'root'
+                code_lines.append(f"assemblies['{parent_name}'].add(assemblies['{name}'], name='{name}')")
+
+        # 뷰어 실행
+        code_lines.extend([
+            "",
+            "# 3D 뷰어 실행",
+            "root = assemblies['root']",
+            "jcq.show(",
+            "    root,",
+            "    axes=False,",
+            "    axes0=False,",
+            "    grid=False,",
+            "    ortho=True,",
+            "    theme='light',",
+            "    default_edgecolor='black',",
+            "    tree_width=250,",
+            "    cad_width=1300,",
+            "    height=700,",
+            "    collapse=1",
+            ")"
+        ])
+
+        return code_lines
 
 
 def main():
