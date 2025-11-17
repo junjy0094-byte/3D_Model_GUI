@@ -506,6 +506,9 @@ class ModelCheckerGUI:
         # 창 최소 크기 설정 (레이아웃 고정)
         self.root.minsize(1400, 800)
 
+        # 스크립트 실행 위치 저장 (모든 파일이 여기에 저장됨)
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+
         # 루트 노드
         self.root_node = ComponentNode('root', 'assembly')
         self.components = {'root': self.root_node}
@@ -1485,8 +1488,8 @@ class ModelCheckerGUI:
                 ]
             )
 
-            # HTML 파일로 저장
-            html_file = os.path.join(os.getcwd(), "3d_viewer.html")
+            # HTML 파일로 저장 (스크립트 위치에)
+            html_file = os.path.join(self.script_dir, "3d_viewer.html")
             fig.write_html(html_file, include_plotlyjs=True, full_html=True)
 
             # 브라우저에서 열기
@@ -1588,8 +1591,8 @@ class ModelCheckerGUI:
 
             root = assemblies['__ROOT__']
 
-            # HTML로 내보내기
-            html_file = os.path.join(os.getcwd(), "cadquery_viewer.html")
+            # HTML로 내보내기 (스크립트 위치에)
+            html_file = os.path.join(self.script_dir, "cadquery_viewer.html")
             export_success = False
 
             # jupyter_cadquery의 HTML export 기능 사용 (버전별 호환성 처리)
@@ -1664,7 +1667,7 @@ class ModelCheckerGUI:
             # 방법 4: STEP 파일로 내보내기 (fallback)
             if not export_success:
                 # 대체 방법: STEP 파일로 내보내고 three-cad-viewer로 표시
-                step_file = os.path.join(os.getcwd(), "model.step")
+                step_file = os.path.join(self.script_dir, "model.step")
                 root.save(step_file)
 
                 # 간단한 HTML 뷰어 생성 (STEP 파일 다운로드 링크 포함)
@@ -1777,9 +1780,9 @@ class ModelCheckerGUI:
 
     def run_3d_viewer(self):
         """3D 뷰어 실행 - Jupyter Notebook 자동 생성 및 실행"""
-        csv_file = "components.csv"
+        csv_file = os.path.join(self.script_dir, "components.csv")
         try:
-            # 1. CSV 파일 저장
+            # 1. CSV 파일 저장 (스크립트 위치에)
             with open(csv_file, 'w', encoding='utf-8', newline='') as f:
                 fieldnames = ['name', 'type', 'parent', 'L', 'W', 'T', 'D', 'H',
                              'cx', 'cy', 'cz', 'color', 'coord_file', 'coord_has_header']
@@ -1903,7 +1906,7 @@ class ModelCheckerGUI:
             "nbformat_minor": 4
         }
 
-        notebook_file = os.path.join(os.getcwd(), "model_viewer.ipynb")
+        notebook_file = os.path.join(self.script_dir, "model_viewer.ipynb")
         with open(notebook_file, 'w', encoding='utf-8') as f:
             json.dump(notebook_content, f, indent=2, ensure_ascii=False)
 
@@ -1932,13 +1935,17 @@ class ModelCheckerGUI:
         code_lines.append("")
         code_lines.append("# 형상 추가")
 
+        # assembly 이름 목록 (parent 검증용)
+        assembly_names = ['root'] + [n for n, nd in self.components.items() if nd.type == 'assembly']
+
         # 형상 추가
         for name, node in self.components.items():
             if name == 'root':
                 continue
             if node.type in ['box', 'cyl', 'sphere']:
-                parent_name = node.parent if node.parent and node.parent != 'root' else 'root'
-                if parent_name not in [n for n in self.components.keys()] and parent_name != 'root':
+                parent_name = node.parent if node.parent else 'root'
+                # parent가 assembly가 아니면 root로 fallback
+                if parent_name not in assembly_names:
                     parent_name = 'root'
 
                 color = node.color if node.color else 'lightblue'
@@ -1975,7 +1982,10 @@ class ModelCheckerGUI:
             if name == 'root':
                 continue
             if node.type == 'assembly':
-                parent_name = node.parent if node.parent and node.parent != 'root' else 'root'
+                parent_name = node.parent if node.parent else 'root'
+                # parent가 assembly가 아니면 root로 fallback
+                if parent_name not in assembly_names:
+                    parent_name = 'root'
                 code_lines.append(f"assemblies['{parent_name}'].add(assemblies['{name}'], name='{name}')")
 
         # 뷰어 실행
